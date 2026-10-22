@@ -5,6 +5,8 @@ import com.myflower.app.data.DataRepository
 import com.myflower.app.data.model.BindDeviceRequest
 import com.myflower.app.data.model.BindDeviceResponse
 import com.myflower.app.data.model.DataPoint
+import com.myflower.app.data.model.Device
+import com.myflower.app.data.model.ProvisionDeviceRequest
 import com.myflower.app.data.remote.ApiService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -24,6 +26,34 @@ class DataRepositoryTest {
     private fun repository(result: () -> Any?): DataRepository {
         val api = Proxy.newProxyInstance(ApiService::class.java.classLoader, arrayOf(ApiService::class.java)) { _, _, _ -> result() } as ApiService
         return DataRepository(api)
+    }
+
+    @Test
+    fun provisionDeviceSendsIotCredentialsAndReturnsDeviceCode() = runTest {
+        val device = Device(2, 7, "窗边的小绿", "device-code-2", false, null, "2026-10-22T00:00:00")
+        var seen: ProvisionDeviceRequest? = null
+        val api = Proxy.newProxyInstance(ApiService::class.java.classLoader, arrayOf(ApiService::class.java)) { _, method, args ->
+            check(method.name == "provisionDevice") { "Unexpected API call: ${method.name}" }
+            seen = args!![0] as ProvisionDeviceRequest
+            device
+        } as ApiService
+
+        val actual = DataRepository(api).provisionDevice("窗边的小绿", "pot_1", "grow123")
+
+        assertSame(device, actual)
+        assertEquals(ProvisionDeviceRequest("窗边的小绿", "pot_1", "grow123"), seen)
+        assertEquals("device-code-2", actual.deviceKey)
+    }
+
+    @Test
+    fun provisionConflictPropagatesForUiMapping() = runTest {
+        val error = HttpException(Response.error<Any>(409, "{}".toResponseBody()))
+        try {
+            repository { throw error }.provisionDevice("窗边的小绿", "pot_1", "grow123")
+            fail("Expected HTTP 409")
+        } catch (actual: HttpException) {
+            assertSame(error, actual)
+        }
     }
 
     @Test

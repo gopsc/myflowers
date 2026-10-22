@@ -1,5 +1,10 @@
 package com.myflower.app.ui.device
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,16 +17,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Spa
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -269,9 +282,27 @@ fun AddDeviceDialog(repository: DataRepository, onDismiss: () -> Unit, onCreated
     var binding by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     var deviceKey by remember { mutableStateOf("") }
+    var iotUser by rememberSaveable { mutableStateOf("") }
+    var iotPass by remember { mutableStateOf("") }
+    var passVisible by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var created by remember { mutableStateOf<Device?>(null) }
     val scope = rememberCoroutineScope()
+
+    val provisioned = created
+    if (provisioned != null) {
+        ProvisionedDeviceDialog(
+            device = provisioned,
+            account = iotUser.trim(),
+            password = iotPass,
+            onDone = { onCreated(provisioned) }
+        )
+        return
+    }
+
+    val createReady = name.trim().length in 1..100 &&
+        iotUser.trim().length in 3..50 && iotPass.length >= 6
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         containerColor = MaterialTheme.colorScheme.surface,
@@ -296,14 +327,49 @@ fun AddDeviceDialog(repository: DataRepository, onDismiss: () -> Unit, onCreated
                     )
                     Text("设备密钥可授予设备访问权限，请勿公开分享。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    Text("为你的智能花盆创建一个设备记录。", style = MaterialTheme.typography.bodyMedium)
+                    Text("创建花盆会同时开通一个专属设备账号，供花盆接入时登录使用。", style = MaterialTheme.typography.bodyMedium)
                     OutlinedTextField(value = name, onValueChange = { name = it; error = null }, label = { Text("花盆名称") }, placeholder = { Text("例如：窗边的小绿") }, singleLine = true, enabled = !busy, isError = name.length > 100, supportingText = { Text("${name.length}/100") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        value = iotUser,
+                        onValueChange = { iotUser = it; error = null },
+                        label = { Text("设备账号") },
+                        placeholder = { Text("例如：pot_window_01") },
+                        singleLine = true,
+                        enabled = !busy,
+                        isError = iotUser.isNotEmpty() && iotUser.trim().length !in 3..50,
+                        supportingText = { Text("3–50 个字符；只给花盆登录用，不会登录 App") },
+                        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = iotPass,
+                        onValueChange = { iotPass = it; error = null },
+                        label = { Text("设备密码") },
+                        singleLine = true,
+                        enabled = !busy,
+                        isError = iotPass.isNotEmpty() && iotPass.length < 6,
+                        supportingText = { Text("至少 6 位；创建成功后请连同设备码一起写进花盆配置") },
+                        visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { passVisible = !passVisible }, enabled = !busy) {
+                                Icon(
+                                    if (passVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                    contentDescription = if (passVisible) "隐藏设备密码" else "显示设备密码"
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
                 error?.let { ErrorNotice(it) }
             }
         },
         confirmButton = {
-            Button(enabled = !busy && (if (binding) deviceKey.isNotBlank() else name.trim().length in 1..100), onClick = {
+            Button(
+                enabled = !busy && (if (binding) deviceKey.isNotBlank() else createReady),
+                modifier = Modifier.semantics { contentDescription = if (binding) "确认绑定" else "确认创建花盆" },
+                onClick = {
                 busy = true
                 error = null
                 scope.launch {
@@ -312,20 +378,78 @@ fun AddDeviceDialog(repository: DataRepository, onDismiss: () -> Unit, onCreated
                             repository.bindDevice(deviceKey.trim())
                             onBound()
                         } else {
-                            onCreated(repository.createDevice(name.trim()))
+                            created = repository.provisionDevice(name.trim(), iotUser.trim(), iotPass)
                         }
                     } catch (e: CancellationException) { throw e
                     } catch (e: Exception) {
-                        error = if (binding && e is HttpException) when (e.code()) {
-                            400, 409 -> "无法绑定：设备可能已绑定，或属于当前账号。"
-                            403 -> "当前账号没有绑定此设备的权限。"
-                            404 -> "没有找到设备，请检查设备密钥。"
+                        error = when {
+                            binding && e is HttpException -> when (e.code()) {
+                                400, 409 -> "无法绑定：设备可能已绑定，或属于当前账号。"
+                                403 -> "当前账号没有绑定此设备的权限。"
+                                404 -> "没有找到设备，请检查设备密钥。"
+                                else -> userMessage(e)
+                            }
+                            !binding && e is HttpException && e.code() == 409 ->
+                                "这个设备账号已被占用：换一个账号，或改用「绑定已有」。"
+                            !binding && e is HttpException && e.code() == 422 ->
+                                "账号或密码格式不对：账号 3–50 个字符，密码至少 6 位。"
                             else -> userMessage(e)
-                        } else userMessage(e)
+                        }
                     } finally { busy = false }
                 }
-            }) { Text(if (binding) { if (busy) "绑定中…" else "绑定花盆" } else { if (busy) "添加中…" else "添加花盆" }) }
+            }) { Text(if (binding) { if (busy) "绑定中…" else "绑定花盆" } else { if (busy) "创建中…" else "创建花盆" }) }
         },
         dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("取消") } }
     )
+}
+
+/** 创建成功后的接入信息：这四项要填进花盆的配置。密码只在这里展示一次。 */
+@Composable
+private fun ProvisionedDeviceDialog(device: Device, account: String, password: String, onDone: () -> Unit) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDone,
+        containerColor = MaterialTheme.colorScheme.surface,
+        icon = { Icon(Icons.Outlined.CheckCircle, null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text("花盆已创建") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("把这四项填进花盆的接入配置：", style = MaterialTheme.typography.bodyMedium)
+                CredentialRow("设备 ID", "#${device.id}", context)
+                CredentialRow("设备码", device.deviceKey, context)
+                CredentialRow("设备账号", account, context)
+                CredentialRow("设备密码", password, context)
+                Text(
+                    "设备账号只用于花盆登录，不会用于 App 登录；花盆和它的数据仍由当前账号管理。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDone) { Text("完成") } }
+    )
+}
+
+@Composable
+private fun CredentialRow(label: String, value: String, context: Context) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.bodyMedium)
+        }
+        IconButton(
+            onClick = { copyText(context, label, value) },
+            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+        ) {
+            Icon(Icons.Outlined.ContentCopy, "复制$label", Modifier.size(18.dp))
+        }
+    }
+}
+
+private fun copyText(context: Context, label: String, value: String) {
+    val manager = context.getSystemService(ClipboardManager::class.java)
+    manager.setPrimaryClip(ClipData.newPlainText(label, value))
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        Toast.makeText(context, "已复制$label", Toast.LENGTH_SHORT).show()
+    }
 }

@@ -16,6 +16,13 @@ data class CreateDeviceRequest(
     @SerializedName("device_name") val deviceName: String
 )
 
+/** 创建花盆 = 建设备 + 开一个专属 iot 账号；账号密码由用户填写，设备侧接入要用。 */
+data class ProvisionDeviceRequest(
+    @SerializedName("device_name") val deviceName: String,
+    @SerializedName("iot_username") val iotUsername: String,
+    @SerializedName("iot_password") val iotPassword: String
+)
+
 data class UpdateDeviceStatusRequest(
     @SerializedName("is_online") val isOnline: Boolean
 )

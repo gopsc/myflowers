@@ -33,6 +33,10 @@ class DataRepository(private val api: ApiService = RetrofitClient.apiService) {
 
     suspend fun createDevice(name: String): Device = api.createDevice(CreateDeviceRequest(name))
 
+    /** 创建花盆并同时开通设备专属 iot 账号（账号密码由用户填写）。 */
+    suspend fun provisionDevice(name: String, iotUsername: String, iotPassword: String): Device =
+        api.provisionDevice(ProvisionDeviceRequest(name, iotUsername, iotPassword))
+
     suspend fun deleteDevice(deviceId: Int) = api.deleteDevice(deviceId)
 
     suspend fun bindDevice(deviceKey: String): BindDeviceResponse =

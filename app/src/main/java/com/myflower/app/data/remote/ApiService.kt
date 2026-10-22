@@ -23,6 +23,9 @@ interface ApiService {
     @POST("api/v1/devices")
     suspend fun createDevice(@Body request: CreateDeviceRequest): Device
 
+    @POST("api/v1/devices/provision")
+    suspend fun provisionDevice(@Body request: ProvisionDeviceRequest): Device
+
     @GET("api/v1/devices")
     suspend fun getDevices(): List<Device>
 

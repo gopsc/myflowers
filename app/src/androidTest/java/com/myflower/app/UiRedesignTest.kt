@@ -122,28 +122,64 @@ class UiRedesignTest {
     }
 
     @Test
-    fun garden_addNameValidation_andTrimmedCreation() {
+    fun garden_provisionValidatesInput_thenShowsDeviceCode() {
         garden()
         awaitNode(hasContentDescription("刷新花盆") and isEnabled())
         compose.onNodeWithContentDescription("添加花盆").performClick()
-        val confirm = hasText("添加花盆") and hasClickAction() and hasAnyAncestor(isDialog())
+        val confirm = hasContentDescription("确认创建花盆") and hasAnyAncestor(isDialog())
         awaitNode(confirm).assertIsNotEnabled()
         field("花盆名称").performTextInput("   ")
         compose.onNode(confirm).assertIsNotEnabled()
         field("花盆名称").performTextReplacement("a".repeat(101))
         compose.onNode(confirm).assertIsNotEnabled()
-        compose.runOnIdle { assertTrue(api.createRequests.isEmpty()) }
         field("花盆名称").performTextReplacement("  阳台薄荷  ")
+        field("设备账号").performTextInput("pot_balcony")
+        field("设备密码").performTextInput("grow123")
         closeSoftKeyboard()
         compose.onNode(confirm).assertIsEnabled().performClick()
+
+        awaitNode(hasText("花盆已创建"))
+        compose.onNodeWithText("设备码").assertIsDisplayed()
+        compose.onNodeWithText("fake-provisioned-key").assertIsDisplayed()
+        compose.onNodeWithText("pot_balcony").assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(
+                listOf(ProvisionDeviceRequest("阳台薄荷", "pot_balcony", "grow123")),
+                api.provisionRequests
+            )
+            assertTrue(api.createRequests.isEmpty())
+        }
+
+        compose.onNodeWithText("完成").performClick()
         compose.waitUntil(10_000) {
             compose.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty()
         }
         lazyNode(hasText("阳台薄荷")).assertIsDisplayed()
-        compose.runOnIdle {
-            assertEquals(listOf(CreateDeviceRequest("阳台薄荷")), api.createRequests)
-            assertEquals(2, api.devices.size)
+        compose.runOnIdle { assertEquals(2, api.devices.size) }
+    }
+
+    @Test
+    fun garden_provisionConflict_keepsDialogAndCredentials_forRetry() {
+        garden()
+        awaitNode(hasContentDescription("刷新花盆") and isEnabled())
+        compose.onNodeWithContentDescription("添加花盆").performClick()
+        field("花盆名称").performTextInput("阳台薄荷")
+        field("设备账号").performTextInput("pot_taken")
+        field("设备密码").performTextInput("grow123")
+        closeSoftKeyboard()
+        api.provisionFailuresRemaining = 1
+        api.provisionError = HttpException(Response.error<Any>(409, "{}".toResponseBody()))
+        compose.onNode(hasContentDescription("确认创建花盆")).performClick()
+
+        awaitNode(hasText("这个设备账号已被占用：换一个账号，或改用「绑定已有」。"))
+        compose.onNodeWithText("花盆已创建").assertDoesNotExist()
+        field("设备账号").assertTextContains("pot_taken")
+
+        compose.onNodeWithText("取消").performClick()
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty()
         }
+        compose.runOnIdle { assertTrue(api.devices.size == 1) }
     }
 
     @Test
@@ -617,6 +653,9 @@ private class FakeApiService : ApiService {
     val loginRequests = mutableListOf<LoginRequest>()
     val registerRequests = mutableListOf<RegisterRequest>()
     val createRequests = mutableListOf<CreateDeviceRequest>()
+    val provisionRequests = mutableListOf<ProvisionDeviceRequest>()
+    var provisionFailuresRemaining = 0
+    var provisionError: Exception = IOException("Simulated provision failure")
     val bindRequests = mutableListOf<BindDeviceRequest>()
     val unboundIds = mutableListOf<Int>()
     val deletedIds = mutableListOf<Int>()
@@ -677,6 +716,17 @@ private class FakeApiService : ApiService {
         createRequests += request
         delay(100)
         return Device(nextDeviceId++, 7, request.deviceName, "fake-created-key", false, null, SAMPLE_TIME)
+            .also { devices += it }
+    }
+
+    override suspend fun provisionDevice(request: ProvisionDeviceRequest): Device {
+        provisionRequests += request
+        delay(100)
+        if (provisionFailuresRemaining > 0) {
+            provisionFailuresRemaining--
+            throw provisionError
+        }
+        return Device(nextDeviceId++, 7, request.deviceName, "fake-provisioned-key", false, null, SAMPLE_TIME)
             .also { devices += it }
     }
 
