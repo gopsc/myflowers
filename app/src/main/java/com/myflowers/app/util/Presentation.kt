@@ -85,15 +85,12 @@ fun sensorUnit(dataKey: String): String = knownSensors[dataKey]?.unit ?: ""
 private val plantCareTypes = setOf("water", "turn_on_light", "turn_off_light")
 
 /**
- * 是否显示浇水/灯光快捷指令：设备还没有任何上报与指令记录时默认显示（与花盆一致）；
- * 一旦有记录则以内容为准——上报过土壤湿度/光照、或用过浇水/灯光指令的设备才显示，
- * 其他机器只保留自定义指令入口。
+ * 是否显示浇水/灯光快捷指令：不缺省。只有上报过土壤湿度/光照、或用过浇水/灯光指令的
+ * 设备才显示；全新设备和其他机器只保留自定义指令入口。
  */
-fun hasPlantCareQuickActions(sensorKeys: Collection<String>, commandTypes: Collection<String>): Boolean {
-    if (sensorKeys.isEmpty() && commandTypes.isEmpty()) return true
-    return sensorKeys.any { it in setOf("soil_moisture", "light") } ||
+fun hasPlantCareQuickActions(sensorKeys: Collection<String>, commandTypes: Collection<String>): Boolean =
+    sensorKeys.any { it in setOf("soil_moisture", "light") } ||
         commandTypes.any { it in plantCareTypes }
-}
 
 /** 自定义指令参数：空白视为无参数；必须是 JSON 对象，否则返回 null 交由界面提示。 */
 fun parseCommandPayload(text: String): Map<String, Any>? {

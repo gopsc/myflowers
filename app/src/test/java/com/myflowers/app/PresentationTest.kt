@@ -97,8 +97,8 @@ class PresentationTest {
     }
 
     @Test
-    fun plantCareQuickActions_freshDeviceDefaultsToShow() {
-        assertTrue(hasPlantCareQuickActions(emptySet(), emptyList()))
+    fun plantCareQuickActions_freshDeviceShowsNothingByDefault() {
+        assertFalse(hasPlantCareQuickActions(emptySet(), emptyList()))
     }
 
     @Test
