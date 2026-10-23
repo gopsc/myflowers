@@ -7,6 +7,8 @@ import com.google.gson.reflect.TypeToken
 import com.myflowers.app.data.model.Command
 import retrofit2.HttpException
 import java.io.IOException
+import kotlin.math.abs
+import kotlin.math.floor
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -58,10 +60,30 @@ fun commandStatus(status: String): String = when (status) {
     else -> status
 }
 
-fun lastLightRequest(commands: List<Command>): Boolean? = commands
-    .filter { it.commandType in setOf("turn_on_light", "turn_off_light") && it.status in setOf("pending", "sent", "executed") }
-    .maxByOrNull { it.id }
-    ?.let { it.commandType == "turn_on_light" }
+/** 快捷指令 = 历史指令沉淀：类型 + 复用最近一次的参数。 */
+data class QuickCommand(val type: String, val payload: Map<String, Any>)
+
+/**
+ * 把指令历史变成快捷指令：每个类型一条，取该类型最近一次的参数，按最近使用排序。
+ * 全部记录都失败的类型不沉淀（设备不认的指令不该一键重发）。
+ */
+fun quickCommands(commands: List<Command>): List<QuickCommand> =
+    commands.filter { it.status != "failed" }
+        .groupBy { it.commandType }
+        .map { group -> group.value.maxBy { it.id } }
+        .sortedByDescending { it.id }
+        .map { QuickCommand(it.commandType, it.payload) }
+
+/** 快捷按钮的参数摘要：空参数显示「无参数」，整数去掉 Gson 带出的小数点。 */
+fun payloadSummary(payload: Map<String, Any>): String {
+    if (payload.isEmpty()) return "无参数"
+    return payload.entries.joinToString(", ") { "${it.key}=${prettyValue(it.value)}" }
+}
+
+private fun prettyValue(value: Any): String = when (value) {
+    is Double -> if (value == floor(value) && abs(value) < 1e15) value.toLong().toString() else value.toString()
+    else -> value.toString()
+}
 
 /** 常见传感量的展示名与单位；设备是通用的，未知 data_key 原样展示、单位留空。 */
 data class SensorDisplay(val label: String, val unit: String)
@@ -81,16 +103,6 @@ val knownSensors: Map<String, SensorDisplay> = mapOf(
 fun sensorLabel(dataKey: String): String = knownSensors[dataKey]?.label ?: dataKey
 
 fun sensorUnit(dataKey: String): String = knownSensors[dataKey]?.unit ?: ""
-
-private val plantCareTypes = setOf("water", "turn_on_light", "turn_off_light")
-
-/**
- * 是否显示浇水/灯光快捷指令：不缺省。只有上报过土壤湿度/光照、或用过浇水/灯光指令的
- * 设备才显示；全新设备和其他机器只保留自定义指令入口。
- */
-fun hasPlantCareQuickActions(sensorKeys: Collection<String>, commandTypes: Collection<String>): Boolean =
-    sensorKeys.any { it in setOf("soil_moisture", "light") } ||
-        commandTypes.any { it in plantCareTypes }
 
 /** 自定义指令参数：空白视为无参数；必须是 JSON 对象，否则返回 null 交由界面提示。 */
 fun parseCommandPayload(text: String): Map<String, Any>? {

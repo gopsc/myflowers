@@ -205,12 +205,28 @@ class UiRedesignTest {
     }
 
     @Test
-    fun detail_quickActions_waterLightCustom_water100Pending_andGolden() {
+    fun detail_noHistory_showsOnlyCustomCommandEntry() {
         detail()
-        lazyNode(hasText("每次 100 ml")).assertIsDisplayed()
-        compose.onNode(hasText("浇水") and hasClickAction()).assertIsEnabled()
-        compose.onNode(hasText("开灯") and hasClickAction()).assertIsEnabled()
-        // Exclude navigation/refresh and the two tabs: quick actions and the custom command entry remain.
+        compose.onNode(hasText("浇水") and hasClickAction()).assertDoesNotExist()
+        compose.onNode(hasText("开灯") and hasClickAction()).assertDoesNotExist()
+        // Only the custom command entry is actionable besides navigation/refresh/tabs.
+        compose.onAllNodes(
+            hasClickAction() and !hasContentDescription("返回列表") and
+                !hasContentDescription("刷新数据") and !hasText("实时概览") and !hasText("运行记录")
+        ).assertCountEquals(1)
+    }
+
+    @Test
+    fun detail_quickActions_deriveFromHistory_waterResendPending_andGolden() {
+        api.commands += Command(30, 1, 7, "turn_on_light", emptyMap(), "executed", SAMPLE_TIME)
+        api.commands += Command(31, 1, 7, "water", mapOf("amount" to 100), "executed", SAMPLE_TIME)
+        detail()
+        // 快捷指令全部来自历史，没有内置指令；参数复用最近一次的值。
+        compose.onNode(hasText("每次 100 ml")).assertDoesNotExist()
+        lazyNode(hasText("浇水") and hasClickAction()).assertIsEnabled()
+        lazyNode(hasText("开灯") and hasClickAction()).assertIsEnabled()
+        lazyNode(hasText("amount=100")).assertIsDisplayed()
+        // Exclude navigation/refresh and the two tabs: the two history-derived quick actions and the custom entry.
         compose.onAllNodes(
             hasClickAction() and !hasContentDescription("返回列表") and
                 !hasContentDescription("刷新数据") and !hasText("实时概览") and !hasText("运行记录")
@@ -227,33 +243,11 @@ class UiRedesignTest {
         awaitNode(hasText("浇水指令已提交，等待执行"))
         compose.runOnIdle {
             assertEquals(listOf(CreateCommandRequest(1, "water", mapOf("amount" to 100))), api.commandRequests)
-            assertEquals("pending", api.commands.single().status)
+            assertEquals("pending", api.commands.first().status)
         }
         lazyNode(hasText("运行记录") and hasClickAction()).performClick()
         lazyNode(hasText("等待执行")).assertIsDisplayed()
-        compose.onNodeWithText("已执行").assertDoesNotExist()
         compose.onNodeWithText("已下发").assertDoesNotExist()
-    }
-
-    @Test
-    fun detail_lightTogglesRequestedState_notClaimedHardwareState() {
-        detail()
-        lazyNode(hasText("灯光状态未知")).assertIsDisplayed()
-        lazyNode(hasText("开灯") and hasClickAction()).performClick()
-        awaitNode(hasText("关灯") and hasClickAction() and isEnabled())
-        lazyNode(hasText("上次目标：开启")).assertIsDisplayed()
-        compose.runOnIdle {
-            assertEquals(listOf(CreateCommandRequest(1, "turn_on_light", emptyMap())), api.commandRequests)
-            assertEquals("pending", api.commands.single().status)
-        }
-        lazyNode(hasText("关灯") and hasClickAction()).performClick()
-        awaitNode(hasText("开灯") and hasClickAction() and isEnabled())
-        lazyNode(hasText("上次目标：关闭")).assertIsDisplayed()
-        compose.runOnIdle {
-            assertEquals(listOf("turn_on_light", "turn_off_light"), api.commandRequests.map { it.commandType })
-            assertTrue(api.commandRequests.all { it.deviceId == 1 && it.payload.isEmpty() })
-            assertTrue(api.commands.all { it.status == "pending" })
-        }
     }
 
     @Test
@@ -275,6 +269,8 @@ class UiRedesignTest {
         compose.onNode(hasContentDescription("发送自定义指令")).performClick()
         awaitNoDialog()
         awaitNode(hasText("设置阈值指令已提交，等待执行"))
+        // 发送过的自定义指令会沉淀为快捷指令按钮。
+        awaitNode(hasText("设置阈值") and hasClickAction()).assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(listOf(CreateCommandRequest(1, "set_threshold", mapOf("level" to 2.0))), api.commandRequests)
             assertEquals("pending", api.commands.single().status)
@@ -283,20 +279,19 @@ class UiRedesignTest {
 
     @Test
     fun detail_commandError_showsFeedback_andDoesNotInventExecution() {
+        api.commands += Command(40, 1, 7, "turn_on_light", emptyMap(), "executed", SAMPLE_TIME)
         api.commandFailuresRemaining = 1
         detail()
         lazyNode(hasText("开灯") and hasClickAction()).performClick()
         awaitNode(hasText(NETWORK_ERROR)).performScrollTo().assertIsDisplayed()
-        lazyNode(hasText("灯光状态未知")).assertIsDisplayed()
         compose.onNode(hasText("开灯") and hasClickAction()).assertIsEnabled()
         compose.runOnIdle {
             assertEquals(listOf(CreateCommandRequest(1, "turn_on_light", emptyMap())), api.commandRequests)
-            assertTrue(api.commands.isEmpty())
+            assertEquals(1, api.commands.size)
         }
         lazyNode(hasText("运行记录") and hasClickAction()).performClick()
-        lazyNode(hasText("还没有任何指令。")).assertIsDisplayed()
-        compose.onNodeWithText("已执行").assertDoesNotExist()
         compose.onNodeWithText("等待执行").assertDoesNotExist()
+        compose.onNodeWithText("已下发").assertDoesNotExist()
     }
 
     @Test
@@ -541,13 +536,15 @@ class UiRedesignTest {
     }
 
     @Test
-    fun detail_sharedDevice_canWaterAndTurnOnLight_usingOnlyFakeCommands() {
+    fun detail_sharedDevice_reusesHistoryCommands_usingOnlyFakeCommands() {
         useSharedDevice()
+        api.commands += Command(50, 1, 7, "turn_on_light", emptyMap(), "executed", SAMPLE_TIME)
+        api.commands += Command(51, 1, 7, "water", mapOf("amount" to 100), "executed", SAMPLE_TIME)
         detail()
         lazyNode(hasText("浇水") and hasClickAction()).assertIsEnabled().performClick()
         awaitNode(hasText("浇水指令已提交，等待执行"))
         lazyNode(hasText("开灯") and hasClickAction()).assertIsEnabled().performClick()
-        awaitNode(hasText("关灯") and hasClickAction() and isEnabled())
+        awaitNode(hasText("开灯指令已提交，等待执行"))
         compose.runOnIdle {
             assertEquals(OTHER_USER_ID, api.devices.single().userId)
             assertEquals(
@@ -557,8 +554,8 @@ class UiRedesignTest {
                 ),
                 api.commandRequests
             )
-            assertEquals(2, api.commands.size)
-            assertTrue(api.commands.all { it.status == "pending" })
+            assertEquals(4, api.commands.size)
+            assertTrue(api.commands.take(2).all { it.status == "pending" })
             assertTrue(api.deletedIds.isEmpty())
             assertTrue(api.unboundIds.isEmpty())
         }

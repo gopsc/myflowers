@@ -3,9 +3,10 @@ package com.myflowers.app
 import com.myflowers.app.data.model.Command
 import com.myflowers.app.util.commandStatus
 import com.myflowers.app.util.displayTime
-import com.myflowers.app.util.hasPlantCareQuickActions
-import com.myflowers.app.util.lastLightRequest
 import com.myflowers.app.util.parseCommandPayload
+import com.myflowers.app.util.payloadSummary
+import com.myflowers.app.util.quickCommands
+import com.myflowers.app.util.QuickCommand
 import com.myflowers.app.util.sensorLabel
 import com.myflowers.app.util.sensorUnit
 import com.myflowers.app.util.userMessage
@@ -15,43 +16,37 @@ import org.junit.Test
 
 class PresentationTest {
     @Test
-    fun lastLightRequest_withoutLightCommands_isUnknown() {
-        assertNull(lastLightRequest(emptyList()))
-        assertNull(lastLightRequest(listOf(command(1, "water", "executed"))))
-    }
-
-    @Test
-    fun lastLightRequest_ignoresFailedAndUnknownStatusesAndTypes() {
-        val ignored = listOf(
-            command(90, "turn_off_light", "failed"),
-            command(91, "turn_off_light", "unknown"),
-            command(92, "turn_on_light", "queued"),
-            command(93, "toggle_light", "executed"),
-            command(94, "water", "pending")
+    fun quickCommands_groupByType_takeLatestPayload_sortedByRecentUse() {
+        val commands = listOf(
+            command(1, "water", "executed").copy(payload = mapOf("amount" to 50)),
+            command(2, "set_threshold", "executed").copy(payload = mapOf("level" to 2)),
+            command(3, "water", "sent").copy(payload = mapOf("amount" to 100))
         )
-        assertNull(lastLightRequest(ignored))
-        assertEquals(true, lastLightRequest(ignored + command(3, "turn_on_light", "sent")))
+        assertEquals(
+            listOf(
+                QuickCommand("water", mapOf("amount" to 100)),
+                QuickCommand("set_threshold", mapOf("level" to 2))
+            ),
+            quickCommands(commands)
+        )
     }
 
     @Test
-    fun lastLightRequest_usesLargestId_notListOrderOrTimestamp() {
-        val newestId = command(20, "turn_off_light", "pending")
-            .copy(createdAt = "2026-01-01T00:00:00Z")
-        val lowerId = command(19, "turn_on_light", "executed")
-            .copy(createdAt = "2026-10-21T09:30:00Z")
-        listOf(
-            listOf(newestId, lowerId, command(1, "turn_on_light", "sent")),
-            listOf(lowerId, command(1, "turn_on_light", "sent"), newestId)
-        ).forEach { assertEquals(false, lastLightRequest(it)) }
-        assertEquals(true, lastLightRequest(listOf(newestId, command(21, "turn_on_light", "pending"), lowerId)))
+    fun quickCommands_allFailedTypesAreNotKeptAsDefaults() {
+        val commands = listOf(
+            command(1, "reboot", "failed").copy(payload = mapOf("mode" to 1)),
+            command(2, "water", "executed"),
+            command(3, "water", "failed")
+        )
+        // water 的最新记录失败 → 回退到成功那条的参数；reboot 全部失败 → 不沉淀。
+        assertEquals(listOf(QuickCommand("water", emptyMap())), quickCommands(commands))
     }
 
     @Test
-    fun lastLightRequest_acceptsPendingSentAndExecuted_asRequests() {
-        listOf("pending", "sent", "executed").forEach { status ->
-            assertEquals(true, lastLightRequest(listOf(command(1, "turn_on_light", status))))
-            assertEquals(false, lastLightRequest(listOf(command(1, "turn_off_light", status))))
-        }
+    fun payloadSummary_emptyAndFormattedValues() {
+        assertEquals("无参数", payloadSummary(emptyMap()))
+        assertEquals("amount=100", payloadSummary(mapOf("amount" to 100.0)))
+        assertEquals("level=2.5, on=true", payloadSummary(mapOf("level" to 2.5, "on" to true)))
     }
 
     @Test
@@ -94,21 +89,6 @@ class PresentationTest {
     fun sensorDisplay_unknownKeyFallsBackToRawKeyAndNoUnit() {
         assertEquals("pm25", sensorLabel("pm25"))
         assertEquals("", sensorUnit("pm25"))
-    }
-
-    @Test
-    fun plantCareQuickActions_freshDeviceShowsNothingByDefault() {
-        assertFalse(hasPlantCareQuickActions(emptySet(), emptyList()))
-    }
-
-    @Test
-    fun plantCareQuickActions_followsDeviceEvidence() {
-        assertTrue(hasPlantCareQuickActions(setOf("soil_moisture", "temperature"), emptyList()))
-        assertTrue(hasPlantCareQuickActions(setOf("light"), emptyList()))
-        assertTrue(hasPlantCareQuickActions(emptySet(), listOf("water")))
-        assertTrue(hasPlantCareQuickActions(setOf("pm25"), listOf("turn_off_light")))
-        assertFalse(hasPlantCareQuickActions(setOf("pm25", "co2"), emptyList()))
-        assertFalse(hasPlantCareQuickActions(setOf("pm25"), listOf("set_threshold", "reboot")))
     }
 
     @Test

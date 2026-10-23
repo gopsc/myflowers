@@ -50,8 +50,7 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
     var showCustom by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val lightRequested = lastLightRequest(commands)
-    val plantCare = hasPlantCareQuickActions(sensorKeys, commands.map { it.commandType })
+    val quick = quickCommands(commands)
 
     LaunchedEffect(device.id, refresh) {
         loading = true
@@ -170,21 +169,19 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             SectionTitle("轻松照看", "指令提交不代表设备已执行，请以运行记录为准。")
-                            if (plantCare) {
+                            quick.chunked(2).forEach { row ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    CareButton(
-                                        title = "浇水", subtitle = "每次 100 ml", icon = Icons.Outlined.WaterDrop,
-                                        loading = busyCommand == "water", enabled = busyCommand == null && !loading,
-                                        modifier = Modifier.weight(1f), onClick = { send("water", mapOf("amount" to 100)) }
-                                    )
-                                    CareButton(
-                                        title = if (lightRequested == true) "关灯" else "开灯",
-                                        subtitle = when (lightRequested) { true -> "上次目标：开启"; false -> "上次目标：关闭"; null -> "灯光状态未知" },
-                                        icon = if (lightRequested == true) Icons.Outlined.Lightbulb else Icons.Outlined.LightbulbCircle,
-                                        loading = busyCommand in listOf("turn_on_light", "turn_off_light"), enabled = busyCommand == null && !loading,
-                                        warm = true, modifier = Modifier.weight(1f),
-                                        onClick = { send(if (lightRequested == true) "turn_off_light" else "turn_on_light") }
-                                    )
+                                    row.forEach { command ->
+                                        CareButton(
+                                            title = commandTitle(command.type),
+                                            subtitle = payloadSummary(command.payload),
+                                            icon = commandIcon(command.type),
+                                            loading = busyCommand == command.type,
+                                            enabled = busyCommand == null && !loading,
+                                            modifier = Modifier.weight(1f),
+                                            onClick = { send(command.type, command.payload) }
+                                        )
+                                    }
                                 }
                             }
                             OutlinedButton(
@@ -230,12 +227,12 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
 }
 
 @Composable
-private fun CareButton(title: String, subtitle: String, icon: ImageVector, loading: Boolean, enabled: Boolean, modifier: Modifier, warm: Boolean = false, onClick: () -> Unit) {
+private fun CareButton(title: String, subtitle: String, icon: ImageVector, loading: Boolean, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Button(
         onClick = onClick, enabled = enabled, modifier = modifier,
         shape = MaterialTheme.shapes.large, contentPadding = PaddingValues(16.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = if (warm) colors.tertiaryContainer else colors.primary, contentColor = if (warm) colors.onTertiaryContainer else colors.onPrimary)
+        colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = colors.onPrimary)
     ) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (loading) CircularProgressIndicator(Modifier.size(25.dp), color = LocalContentColor.current, strokeWidth = 2.dp)
