@@ -85,25 +85,6 @@ private fun prettyValue(value: Any): String = when (value) {
     else -> value.toString()
 }
 
-/** 常见传感量的展示名与单位；设备是通用的，未知 data_key 原样展示、单位留空。 */
-data class SensorDisplay(val label: String, val unit: String)
-
-val knownSensors: Map<String, SensorDisplay> = mapOf(
-    "soil_moisture" to SensorDisplay("土壤湿度", "%"),
-    "temperature" to SensorDisplay("环境温度", "°C"),
-    "humidity" to SensorDisplay("空气湿度", "%"),
-    "light" to SensorDisplay("光照强度", "lux"),
-    "co2" to SensorDisplay("二氧化碳", "ppm"),
-    "water_level" to SensorDisplay("水位", "%"),
-    "pressure" to SensorDisplay("气压", "hPa"),
-    "battery" to SensorDisplay("电量", "%"),
-    "weight" to SensorDisplay("重量", "kg")
-)
-
-fun sensorLabel(dataKey: String): String = knownSensors[dataKey]?.label ?: dataKey
-
-fun sensorUnit(dataKey: String): String = knownSensors[dataKey]?.unit ?: ""
-
 /** 自定义指令参数：空白视为无参数；必须是 JSON 对象，否则返回 null 交由界面提示。 */
 fun parseCommandPayload(text: String): Map<String, Any>? {
     val trimmed = text.trim()

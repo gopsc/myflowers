@@ -234,11 +234,13 @@ class UiRedesignTest {
         compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
         screenshot("detail-redesign.png")
 
-        listOf("土壤湿度" to "42", "环境温度" to "23.5", "空气湿度" to "61", "光照强度" to "820")
+        // 数据展示完全通用：data_key 原样显示，无预设标签、单位或图标。
+        listOf("soil_moisture" to "42", "temperature" to "23.5", "humidity" to "61", "light" to "820")
             .forEach { (label, value) ->
                 lazyNode(hasText(label)).assertIsDisplayed()
                 lazyNode(hasText(value)).assertIsDisplayed()
             }
+        compose.onNodeWithText("土壤湿度").assertDoesNotExist()
         lazyNode(hasText("浇水") and hasClickAction()).performClick()
         awaitNode(hasText("浇水指令已提交，等待执行"))
         compose.runOnIdle {

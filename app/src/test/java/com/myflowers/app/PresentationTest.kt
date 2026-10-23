@@ -7,8 +7,6 @@ import com.myflowers.app.util.parseCommandPayload
 import com.myflowers.app.util.payloadSummary
 import com.myflowers.app.util.quickCommands
 import com.myflowers.app.util.QuickCommand
-import com.myflowers.app.util.sensorLabel
-import com.myflowers.app.util.sensorUnit
 import com.myflowers.app.util.userMessage
 import java.io.IOException
 import org.junit.Assert.*
@@ -73,22 +71,6 @@ class PresentationTest {
         assertEquals("已下发", commandStatus("sent"))
         assertEquals("已执行", commandStatus("executed"))
         assertEquals("执行失败", commandStatus("failed"))
-    }
-
-    @Test
-    fun sensorDisplay_knownKeysHaveLabelsAndUnits() {
-        assertEquals("土壤湿度", sensorLabel("soil_moisture"))
-        assertEquals("%", sensorUnit("soil_moisture"))
-        assertEquals("环境温度", sensorLabel("temperature"))
-        assertEquals("°C", sensorUnit("temperature"))
-        assertEquals("光照强度", sensorLabel("light"))
-        assertEquals("lux", sensorUnit("light"))
-    }
-
-    @Test
-    fun sensorDisplay_unknownKeyFallsBackToRawKeyAndNoUnit() {
-        assertEquals("pm25", sensorLabel("pm25"))
-        assertEquals("", sensorUnit("pm25"))
     }
 
     @Test

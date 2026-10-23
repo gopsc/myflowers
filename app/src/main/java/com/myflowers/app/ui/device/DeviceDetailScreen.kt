@@ -247,30 +247,13 @@ private fun CareButton(title: String, subtitle: String, icon: ImageVector, loadi
 private fun SensorCard(dataKey: String, point: DataPoint?, loading: Boolean, modifier: Modifier) {
     Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(sensorIcon(dataKey), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(23.dp))
-            Text(sensorLabel(dataKey), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.Outlined.Sensors, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(23.dp))
+            Text(dataKey, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(point?.dataValue ?: "—", style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            val unit = sensorUnit(dataKey)
-            if (unit.isNotBlank()) Text(unit, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             Text(if (point != null) displayTime(point.timestamp) else if (loading) "读取中" else "暂无读数", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
-
-/** 通用设备不限定传感量：已知 key 用贴切图标，其余用统一的传感图标。 */
-private val sensorIcons = mapOf(
-    "soil_moisture" to Icons.Outlined.Grass,
-    "temperature" to Icons.Outlined.Thermostat,
-    "humidity" to Icons.Outlined.WaterDrop,
-    "light" to Icons.Outlined.LightMode,
-    "co2" to Icons.Outlined.Air,
-    "water_level" to Icons.Outlined.Water,
-    "pressure" to Icons.Outlined.Speed,
-    "battery" to Icons.Outlined.BatteryFull,
-    "weight" to Icons.Outlined.Scale
-)
-
-private fun sensorIcon(dataKey: String): ImageVector = sensorIcons[dataKey] ?: Icons.Outlined.Sensors
 
 private fun commandIcon(type: String): ImageVector = when (type) {
     "water" -> Icons.Outlined.WaterDrop
@@ -362,11 +345,10 @@ fun DataPointCard(dataPoint: DataPoint) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Column(Modifier.weight(1f)) {
-                Text(sensorLabel(dataPoint.dataKey), style = MaterialTheme.typography.bodyMedium)
+                Text(dataPoint.dataKey, style = MaterialTheme.typography.bodyMedium)
                 Text(displayTime(dataPoint.timestamp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            val unit = sensorUnit(dataPoint.dataKey)
-            Text("${dataPoint.dataValue}${if (unit.isBlank()) "" else " $unit"}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+            Text(dataPoint.dataValue, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
