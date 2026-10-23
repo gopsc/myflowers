@@ -119,28 +119,6 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                         }
                     }
                 }
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionTitle("轻松照料", "指令提交不代表设备已执行，请以养护记录为准。")
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CareButton(
-                                title = "浇水", subtitle = "每次 100 ml", icon = Icons.Outlined.WaterDrop,
-                                loading = busyCommand == "water", enabled = busyCommand == null && !loading,
-                                modifier = Modifier.weight(1f), onClick = { send("water") }
-                            )
-                            CareButton(
-                                title = if (lightRequested == true) "关灯" else "开灯",
-                                subtitle = when (lightRequested) { true -> "上次目标：开启"; false -> "上次目标：关闭"; null -> "灯光状态未知" },
-                                icon = if (lightRequested == true) Icons.Outlined.Lightbulb else Icons.Outlined.LightbulbCircle,
-                                loading = busyCommand in listOf("turn_on_light", "turn_off_light"), enabled = busyCommand == null && !loading,
-                                warm = true, modifier = Modifier.weight(1f),
-                                onClick = { send(if (lightRequested == true) "turn_off_light" else "turn_on_light") }
-                            )
-                        }
-                        if (!currentDevice.isOnline) Text("设备当前离线，指令可能需要等待设备重新连接。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        commandError?.let { ErrorNotice(it) }
-                    }
-                }
                 if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 error?.let { message -> item {
                     Column {
@@ -167,6 +145,28 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                                 Icon(Icons.Outlined.Eco, null, tint = MaterialTheme.colorScheme.primary)
                                 Text("每株植物都有自己的节奏。请结合植物品种、土壤和实际环境决定是否浇水。", style = MaterialTheme.typography.bodySmall)
                             }
+                        }
+                    }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionTitle("轻松照料", "指令提交不代表设备已执行，请以养护记录为准。")
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                CareButton(
+                                    title = "浇水", subtitle = "每次 100 ml", icon = Icons.Outlined.WaterDrop,
+                                    loading = busyCommand == "water", enabled = busyCommand == null && !loading,
+                                    modifier = Modifier.weight(1f), onClick = { send("water") }
+                                )
+                                CareButton(
+                                    title = if (lightRequested == true) "关灯" else "开灯",
+                                    subtitle = when (lightRequested) { true -> "上次目标：开启"; false -> "上次目标：关闭"; null -> "灯光状态未知" },
+                                    icon = if (lightRequested == true) Icons.Outlined.Lightbulb else Icons.Outlined.LightbulbCircle,
+                                    loading = busyCommand in listOf("turn_on_light", "turn_off_light"), enabled = busyCommand == null && !loading,
+                                    warm = true, modifier = Modifier.weight(1f),
+                                    onClick = { send(if (lightRequested == true) "turn_off_light" else "turn_on_light") }
+                                )
+                            }
+                            if (!currentDevice.isOnline) Text("设备当前离线，指令可能需要等待设备重新连接。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            commandError?.let { ErrorNotice(it) }
                         }
                     }
                 } else {
