@@ -1,6 +1,8 @@
 package com.myflowers.app.ui.device
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,9 +17,17 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.myflowers.app.data.DataRepository
@@ -31,8 +41,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import java.time.Duration
+import java.time.Instant
 
 private const val HISTORY_LIMIT = 100
+private const val VISIBLE_COMMAND_LIMIT = 10
 
 @Composable
 fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () -> Unit) {
@@ -51,6 +64,10 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val quick = quickCommands(commands)
+    val historySeries = remember(history) { historyChartSeries(history) }
+    var historyKey by rememberSaveable(device.id) { mutableStateOf<String?>(null) }
+    val selectedSeries = historySeries.find { it.dataKey == historyKey } ?: historySeries.firstOrNull()
+    val recentKeys = remember(sensorKeys, latest) { recentSensorKeys(sensorKeys, latest, Instant.now()) }
 
     LaunchedEffect(device.id, refresh) {
         loading = true
@@ -124,12 +141,10 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text(currentDevice.deviceName, style = MaterialTheme.typography.headlineMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                                    Text("一点关注，一点安心。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text("设备 #${device.id}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                                 }
                                 PlantIllustration(Modifier.size(132.dp))
                             }
-                            Text("最近连接  ${displayTime(currentDevice.lastSeen)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -147,15 +162,33 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                     }
                 }
                 if (tab == 0) {
-                    item { SectionTitle("感知它的一举一动", "最近一次上报 · 点击右上角刷新") }
+                    item { SectionTitle("感知它的一举一动") }
                     if (!loading && error == null && sensorKeys.isEmpty()) {
                         item {
                             Text("暂未收到数据，等待设备第一次上报。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    items(sensorKeys.chunked(2)) { row ->
+                    if (!loading && error == null && sensorKeys.isNotEmpty() && recentKeys.isEmpty()) {
+                        item {
+                            Text(
+                                "超过 ${SENSOR_STALE_AFTER.toMinutes()} 分钟没有新的上报，实时数据暂不显示。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    items(recentKeys.chunked(2)) { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             row.forEach { key -> SensorCard(key, latest[key], loading, Modifier.weight(1f)) }
+                        }
+                    }
+                    if (!loading && recentKeys.isNotEmpty() && recentKeys.size < sensorKeys.size) {
+                        item {
+                            Text(
+                                "已隐藏 ${sensorKeys.size - recentKeys.size} 个超过 ${SENSOR_STALE_AFTER.toMinutes()} 分钟未更新的项目。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                     item {
@@ -207,12 +240,28 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                         }
                     }
                 } else {
-                    item { SectionTitle("最近的指令", "等待执行 → 已下发 → 已执行 / 执行失败") }
-                    if (commands.isEmpty()) item { Text(if (loading) "正在读取指令…" else if (error != null) "指令记录未能加载" else "还没有任何指令。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    items(commands, key = { "command-${it.id}" }) { CommandCard(it) }
-                    item { SectionTitle("数据足迹", "最近 $HISTORY_LIMIT 条设备上报") }
+                    item { SectionTitle("数据足迹") }
                     if (history.isEmpty()) item { Text(if (loading) "正在读取数据…" else if (error != null) "设备数据未能加载" else "暂未收到数据，等待设备第一次上报。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    items(history, key = { "data-${it.id}" }) { DataPointCard(it) }
+                    if (selectedSeries != null) {
+                        item {
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                historySeries.forEach { series ->
+                                    FilterChip(
+                                        selected = series.dataKey == selectedSeries.dataKey,
+                                        onClick = { historyKey = series.dataKey },
+                                        label = { Text(series.dataKey) },
+                                        modifier = Modifier.semantics { contentDescription = "查看 ${series.dataKey} 趋势" }
+                                    )
+                                }
+                            }
+                        }
+                        item { HistoryChart(selectedSeries) }
+                    } else if (history.isNotEmpty()) {
+                        item { Text("暂无可绘制的数值数据。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                    item { SectionTitle("最近的指令") }
+                    if (commands.isEmpty()) item { Text(if (loading) "正在读取指令…" else if (error != null) "指令记录未能加载" else "还没有任何指令。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    items(commands.take(VISIBLE_COMMAND_LIMIT), key = { "command-${it.id}" }) { CommandCard(it) }
                 }
             }
         }
@@ -328,6 +377,7 @@ private fun CustomCommandDialog(
 
 @Composable
 fun CommandCard(command: Command) {
+    val timedOut = commandTimedOut(command.status, command.createdAt, Instant.now())
     Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Icon(commandIcon(command.commandType), null, tint = MaterialTheme.colorScheme.primary)
@@ -335,21 +385,73 @@ fun CommandCard(command: Command) {
                 Text(commandTitle(command.commandType), style = MaterialTheme.typography.titleSmall)
                 Text(displayTime(command.createdAt), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(commandStatus(command.status), style = MaterialTheme.typography.labelMedium, color = if (command.status == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            Text(
+                if (timedOut) "超时失效" else commandStatus(command.status),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (command.status == "failed" || timedOut) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            )
         }
     }
 }
 
 @Composable
-fun DataPointCard(dataPoint: DataPoint) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text(dataPoint.dataKey, style = MaterialTheme.typography.bodyMedium)
-                Text(displayTime(dataPoint.timestamp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text(dataPoint.dataValue, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+private fun HistoryChart(series: HistoryChartSeries) {
+    val points = series.points
+    val minimum = points.minOf { it.value }
+    val maximum = points.maxOf { it.value }
+    val positions = remember(points) {
+        val elapsed = points.map { Duration.between(points.first().time, it.time).let { duration -> duration.seconds + duration.nano / 1e9 } }
+        points.mapIndexed { index, point ->
+            Offset(chartFraction(elapsed[index], 0.0, elapsed.last()), chartFraction(point.value, minimum, maximum))
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+    val colors = MaterialTheme.colorScheme
+    val textMeasurer = rememberTextMeasurer()
+    val labelStyle = MaterialTheme.typography.labelSmall.copy(color = colors.onSurfaceVariant)
+    val ticks = if (minimum == maximum) listOf(minimum) else listOf(maximum, minimum / 2 + maximum / 2, minimum)
+    val labels = ticks.map { textMeasurer.measure(chartNumber(it), labelStyle) }
+    val inset = with(LocalDensity.current) { 12.dp.toPx() }
+    val left = labels.maxOf { it.size.width }.toFloat() + inset
+
+    Surface(shape = MaterialTheme.shapes.large, color = colors.surface, border = BorderStroke(1.dp, colors.outlineVariant)) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(series.dataKey, style = MaterialTheme.typography.titleMedium)
+            Canvas(
+                Modifier.fillMaxWidth().height(200.dp)
+                    .semantics { contentDescription = "${series.dataKey} 历史折线图" }
+            ) {
+                val plotWidth = (size.width - left - inset).coerceAtLeast(1f)
+                val plotHeight = (size.height - inset * 2).coerceAtLeast(1f)
+                val bottom = inset + plotHeight
+                val coordinates = positions.map { Offset(left + it.x * plotWidth, inset + (1 - it.y) * plotHeight) }
+                ticks.forEachIndexed { index, tick ->
+                    val y = inset + (1 - chartFraction(tick, minimum, maximum)) * plotHeight
+                    drawLine(colors.outlineVariant, Offset(left, y), Offset(left + plotWidth, y), 1.dp.toPx())
+                    drawText(labels[index], topLeft = Offset(0f, y - labels[index].size.height / 2f))
+                }
+                if (coordinates.size > 1) {
+                    val area = Path().apply {
+                        moveTo(coordinates.first().x, bottom)
+                        coordinates.forEach { lineTo(it.x, it.y) }
+                        lineTo(coordinates.last().x, bottom)
+                        close()
+                    }
+                    drawPath(area, Brush.verticalGradient(listOf(colors.primary.copy(alpha = 0.16f), colors.primary.copy(alpha = 0.01f))))
+                    val line = Path().apply {
+                        moveTo(coordinates.first().x, coordinates.first().y)
+                        coordinates.drop(1).forEach { lineTo(it.x, it.y) }
+                    }
+                    drawPath(line, colors.primary, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+                }
+                coordinates.forEach { drawCircle(colors.primary, 3.dp.toPx(), it) }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(displayTime(points.first().record.timestamp), style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
+                if (points.first().time != points.last().time) {
+                    Text(displayTime(points.last().record.timestamp), style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                }
+            }
+            if (points.size == 1) Text("仅有一个数据点，收到更多上报后将显示趋势。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+        }
     }
 }

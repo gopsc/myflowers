@@ -5,12 +5,19 @@ import com.google.gson.JsonParser
 import com.google.gson.JsonSyntaxException
 import com.google.gson.reflect.TypeToken
 import com.myflowers.app.data.model.Command
+import com.myflowers.app.data.model.DataPoint
 import retrofit2.HttpException
 import java.io.IOException
+import java.math.BigDecimal
+import java.math.MathContext
 import kotlin.math.abs
 import kotlin.math.floor
+import java.time.DateTimeException
+import java.time.Duration
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import javax.net.ssl.SSLException
@@ -44,6 +51,58 @@ fun displayTime(value: String?): String {
     }
 }
 
+data class HistoryChartPoint(val record: DataPoint, val value: Double, val time: Instant)
+
+data class HistoryChartSeries(val dataKey: String, val points: List<HistoryChartPoint>)
+
+fun historyChartSeries(history: List<DataPoint>): List<HistoryChartSeries> =
+    history.groupBy { it.dataKey }.mapNotNull { (dataKey, records) ->
+        val points = records.mapNotNull { record ->
+            val value = record.dataValue.trim().toDoubleOrNull()
+            val time = historyTime(record.timestamp)
+            if (value != null && value.isFinite() && time != null) HistoryChartPoint(record, value, time) else null
+        }
+        if (points.isEmpty()) null else HistoryChartSeries(
+            dataKey,
+            points.sortedWith(compareBy<HistoryChartPoint> { it.time }.thenBy { it.record.id })
+        )
+    }
+
+private fun historyTime(timestamp: String): Instant? = try {
+    try {
+        OffsetDateTime.parse(timestamp).toInstant()
+    } catch (_: DateTimeParseException) {
+        LocalDateTime.parse(timestamp).toInstant(ZoneOffset.UTC)
+    }
+} catch (_: DateTimeException) {
+    null
+}
+
+fun chartFraction(value: Double, minimum: Double, maximum: Double): Float {
+    if (minimum == maximum) return 0.5f
+    val scale = maxOf(abs(minimum), abs(maximum))
+    val scaledMinimum = minimum / scale
+    return ((value / scale - scaledMinimum) / (maximum / scale - scaledMinimum))
+        .toFloat().coerceIn(0f, 1f)
+}
+
+fun chartNumber(value: Double): String =
+    BigDecimal.valueOf(value).round(MathContext(4)).stripTrailingZeros().toString()
+
+/** 实时概览只展示最近这段时间内上报过的传感量。 */
+val SENSOR_STALE_AFTER: Duration = Duration.ofMinutes(30)
+
+/** 保留最新读数够新的字段；缺失、时间无法解析或已过期的字段都不再展示。 */
+fun recentSensorKeys(
+    keys: List<String>,
+    latest: Map<String, DataPoint?>,
+    now: Instant,
+    staleAfter: Duration = SENSOR_STALE_AFTER
+): List<String> = keys.filter { key ->
+    val time = latest[key]?.let { historyTime(it.timestamp) }
+    time != null && !time.isBefore(now.minus(staleAfter))
+}
+
 fun commandTitle(type: String): String = when (type) {
     "water" -> "浇水"
     "turn_on_light" -> "开灯"
@@ -59,6 +118,14 @@ fun commandStatus(status: String): String = when (status) {
     "failed" -> "执行失败"
     else -> status
 }
+
+/** 等待回应超过这段时间的指令视为超时失效。 */
+val COMMAND_RESPONSE_TIMEOUT: Duration = Duration.ofMinutes(10)
+
+/** 只有等待执行或已下发的指令会超时；已执行、已失败和时间无法解析的记录保持原状态。 */
+fun commandTimedOut(status: String, createdAt: String, now: Instant): Boolean =
+    (status == "pending" || status == "sent") &&
+        historyTime(createdAt)?.let { !it.isAfter(now.minus(COMMAND_RESPONSE_TIMEOUT)) } == true
 
 /** 快捷指令 = 历史指令沉淀：类型 + 复用最近一次的参数。 */
 data class QuickCommand(val type: String, val payload: Map<String, Any>)

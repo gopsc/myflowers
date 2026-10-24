@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso.closeSoftKeyboard
@@ -22,6 +24,9 @@ import com.myflowers.app.ui.login.LoginScreen
 import com.myflowers.app.ui.register.RegisterScreen
 import java.io.File
 import java.io.IOException
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -207,6 +212,7 @@ class UiRedesignTest {
     @Test
     fun detail_noHistory_showsOnlyCustomCommandEntry() {
         detail()
+        lazyNode(hasText("自定义指令") and hasClickAction()).assertIsEnabled()
         compose.onNode(hasText("浇水") and hasClickAction()).assertDoesNotExist()
         compose.onNode(hasText("开灯") and hasClickAction()).assertDoesNotExist()
         // Only the custom command entry is actionable besides navigation/refresh/tabs.
@@ -253,8 +259,32 @@ class UiRedesignTest {
     }
 
     @Test
-    fun detail_customCommand_validatesInput_thenSendsArbitraryTypeAndPayload() {
+    fun detail_overview_hidesItemsWithoutRecentUpdates_thenShowsAllStaleNotice() {
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        api.points.clear()
+        api.points += DataPoint(1, 1, "fresh_metric", "7", now.minusMinutes(5).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
+        api.points += DataPoint(2, 1, "stale_metric", "9", now.minusMinutes(45).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
+        api.points += DataPoint(3, 1, "broken_metric", "11", "invalid-time")
         detail()
+        lazyNode(hasText("fresh_metric")).assertIsDisplayed()
+        lazyNode(hasText("7")).assertIsDisplayed()
+        compose.onNodeWithText("stale_metric").assertDoesNotExist()
+        compose.onNodeWithText("broken_metric").assertDoesNotExist()
+        lazyNode(hasText("已隐藏 2 个超过 30 分钟未更新的项目。")).assertIsDisplayed()
+        screenshot("overview-stale-filtered.png")
+
+        compose.runOnIdle {
+            api.points.clear()
+            api.points += DataPoint(4, 1, "old_metric", "1", now.minusHours(2).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
+        }
+        lazyNode(hasContentDescription("刷新数据")).performClick()
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasText("超过 30 分钟没有新的上报，实时数据暂不显示。")).assertIsDisplayed()
+        compose.onNodeWithText("old_metric").assertDoesNotExist()
+    }
+
+    @Test
+    fun detail_customCommand_validatesInput_thenSendsArbitraryTypeAndPayload() {        detail()
         lazyNode(hasText("自定义指令") and hasClickAction()).performClick()
         awaitNode(hasText("发送任意指令")).assertIsDisplayed()
         compose.onNode(hasContentDescription("发送自定义指令")).performClick()
@@ -545,6 +575,10 @@ class UiRedesignTest {
         detail()
         lazyNode(hasText("浇水") and hasClickAction()).assertIsEnabled().performClick()
         awaitNode(hasText("浇水指令已提交，等待执行"))
+        // Snackbar 会覆盖下方按钮，等它消失后再进行真实触摸点击。
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(hasText("浇水指令已提交，等待执行")).fetchSemanticsNodes().isEmpty()
+        }
         lazyNode(hasText("开灯") and hasClickAction()).assertIsEnabled().performClick()
         awaitNode(hasText("开灯指令已提交，等待执行"))
         compose.runOnIdle {
@@ -563,11 +597,203 @@ class UiRedesignTest {
         }
     }
 
+    @Test
+    fun detail_commandHistory_marksUnansweredCommandsTimedOut() {
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        api.commands.clear()
+        api.commands += listOf(
+            Command(1, 1, 7, "water", emptyMap(), "pending", now.minusMinutes(11).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)),
+            Command(2, 1, 7, "turn_on_light", emptyMap(), "sent", now.minusMinutes(30).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)),
+            Command(3, 1, 7, "set_threshold", emptyMap(), "executed", now.minusMinutes(30).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)),
+            Command(4, 1, 7, "reboot", emptyMap(), "pending", now.minusMinutes(5).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
+        )
+        detail()
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasText("reboot")).assertIsDisplayed()
+        repeat(3) { compose.onNode(hasScrollToIndexAction()).performTouchInput { swipeUp() } }
+        compose.waitForIdle()
+        screenshot("command-timeout.png")
+        compose.onAllNodes(hasText("超时失效")).assertCountEquals(2)
+        compose.onAllNodes(hasText("等待执行")).assertCountEquals(1)
+        compose.onAllNodes(hasText("已执行")).assertCountEquals(1)
+        compose.onAllNodes(hasText("已下发")).assertCountEquals(0)
+    }
+
+    @Test
+    fun detail_commandHistory_showsAtMostTenRecentCommands() {
+        api.commands.clear()
+        api.commands += (1..12).map {
+            Command(it, 1, 7, "cmd_%02d".format(it), emptyMap(), "executed", SAMPLE_TIME)
+        }
+        detail()
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasText("cmd_01")).assertIsDisplayed()
+        lazyNode(hasText("cmd_10")).assertIsDisplayed()
+        repeat(3) { compose.onNode(hasScrollToIndexAction()).performTouchInput { swipeUp() } }
+        compose.waitForIdle()
+        lazyNode(hasText("cmd_10")).assertIsDisplayed()
+        compose.onNodeWithText("cmd_11").assertDoesNotExist()
+        compose.onNodeWithText("cmd_12").assertDoesNotExist()
+    }
+
+    @Test
+    fun detail_historyChart_isStaticAndSwitchesFields_keepsCommandHistory() {
+        api.points.clear()
+        api.points += listOf(
+            DataPoint(3, 1, "temperature", "28.5", "2026-10-21T10:30:00Z"),
+            DataPoint(1, 1, "temperature", "18.5", "2026-10-21T08:30:00Z"),
+            DataPoint(2, 1, "temperature", "22.5", "2026-10-21T09:30:00Z"),
+            DataPoint(4, 1, "humidity", "61", SAMPLE_TIME)
+        )
+        api.commands += Command(50, 1, 7, "water", emptyMap(), "executed", SAMPLE_TIME)
+        detail()
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        val chart = hasContentDescription("temperature 历史折线图")
+        lazyNode(chart).assertIsDisplayed()
+        compose.onNode(chart).assert(!hasClickAction())
+        compose.onNodeWithText("最低").assertDoesNotExist()
+        compose.onNodeWithText("最高").assertDoesNotExist()
+        compose.onAllNodes(hasText("个数据点", substring = true)).assertCountEquals(0)
+        compose.onNodeWithText("22.5").assertDoesNotExist()
+        compose.onNodeWithText("2026-10-21T10:30:00Z").assertDoesNotExist()
+        screenshot("history-chart-light.png")
+        lazyNode(hasContentDescription("查看 humidity 趋势")).performClick()
+        lazyNode(hasContentDescription("humidity 历史折线图")).assertIsDisplayed()
+        compose.onNode(chart).assertDoesNotExist()
+        lazyNode(hasText("仅有一个数据点，收到更多上报后将显示趋势。")).assertIsDisplayed()
+        lazyNode(hasText("最近的指令")).assertIsDisplayed()
+        lazyNode(hasText("已执行")).assertIsDisplayed()
+        compose.runOnIdle { assertTrue(api.commandRequests.isEmpty()) }
+    }
+
+    @Test
+    fun detail_historyChart_onlyShowsNumericStrings_hidesNonNumericFieldsAndRecords() {
+        api.points.clear()
+        api.points += listOf(
+            DataPoint(1, 1, "reading", " 12.5 ", SAMPLE_TIME),
+            DataPoint(2, 1, "reading", "offline", SAMPLE_TIME),
+            DataPoint(3, 1, "reading", "14.5", "invalid-time"),
+            DataPoint(4, 1, "status", "{\"online\":true}", SAMPLE_TIME),
+            DataPoint(5, 1, "reading", "1.25e2", SAMPLE_TIME)
+        )
+        detail()
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasContentDescription("reading 历史折线图")).assertIsDisplayed()
+        compose.onNodeWithText(" 12.5 ").assertDoesNotExist()
+        compose.onNodeWithContentDescription("查看 status 趋势").assertDoesNotExist()
+        listOf("offline", "invalid-time", "{\"online\":true}").forEach {
+            compose.onNodeWithText(it).assertDoesNotExist()
+        }
+        compose.runOnIdle { api.points.removeAll { it.dataKey == "reading" } }
+        lazyNode(hasContentDescription("刷新数据")).performClick()
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasText("暂无可绘制的数值数据。")).assertIsDisplayed()
+        compose.onNodeWithContentDescription("reading 历史折线图").assertDoesNotExist()
+        compose.onNodeWithContentDescription("查看 status 趋势").assertDoesNotExist()
+        compose.onNodeWithText("{\"online\":true}").assertDoesNotExist()
+        screenshot("history-chart-nonnumeric-empty.png")
+    }
+
+    @Test
+    fun detail_historyChart_emptyAndRefresh_removesOldSelection() {
+        api.points.clear()
+        detail()
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasText("暂未收到数据，等待设备第一次上报。")).assertIsDisplayed()
+        compose.runOnIdle { api.points += DataPoint(1, 1, "new_metric", "42", SAMPLE_TIME) }
+        lazyNode(hasContentDescription("刷新数据")).performClick()
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasContentDescription("new_metric 历史折线图")).assertIsDisplayed()
+        compose.runOnIdle {
+            api.points.clear()
+            api.points += DataPoint(2, 1, "replacement", "7", SAMPLE_TIME)
+        }
+        lazyNode(hasContentDescription("刷新数据")).performClick()
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasContentDescription("replacement 历史折线图")).assertIsDisplayed()
+        compose.onNodeWithContentDescription("查看 new_metric 趋势").assertDoesNotExist()
+        compose.runOnIdle { api.points.clear() }
+        lazyNode(hasContentDescription("刷新数据")).performClick()
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasText("暂未收到数据，等待设备第一次上报。")).assertIsDisplayed()
+        compose.onNodeWithContentDescription("replacement 历史折线图").assertDoesNotExist()
+    }
+
+    @Test
+    fun detail_historyChart_sameTimeConstantValues_inDarkTheme() {
+        api.points.clear()
+        api.points += (1..3).map { DataPoint(it, 1, "constant", "-2.5", SAMPLE_TIME) }
+        compose.setContent {
+            MyFlowersTheme(darkTheme = true) {
+                Surface(Modifier.fillMaxSize()) { DeviceDetailScreen(api.devices.single(), repository, {}) }
+            }
+        }
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasContentDescription("constant 历史折线图")).assertIsDisplayed()
+        compose.onNodeWithText("最低").assertDoesNotExist()
+        compose.onNodeWithText("最高").assertDoesNotExist()
+        screenshot("history-chart-dark.png")
+    }
+
+    @Test
+    fun detail_historyChart_loadFailureCanRetry_withoutInventedPoints() {
+        api.dataFailuresRemaining = 1
+        detail()
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasText("设备数据未能加载")).assertIsDisplayed()
+        compose.onAllNodes(hasContentDescription("历史折线图", substring = true)).assertCountEquals(0)
+        lazyNode(hasText("重新加载数据") and hasClickAction()).performClick()
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasContentDescription("soil_moisture 历史折线图")).assertIsDisplayed()
+    }
+
+    @Test
+    fun detail_historyChart_restoresSafelyAfterHistoryShrinks() {
+        api.points.clear()
+        api.points += (1..3).map { DataPoint(it, 1, "metric", "$it", "2026-10-21T09:3${it}:00Z") }
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent {
+            MyFlowersTheme(darkTheme = false) {
+                Surface(Modifier.fillMaxSize()) { DeviceDetailScreen(api.devices.single(), repository, {}) }
+            }
+        }
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasContentDescription("metric 历史折线图")).assertIsDisplayed()
+        compose.runOnIdle {
+            api.points.clear()
+            api.points += DataPoint(10, 1, "metric", "10", SAMPLE_TIME)
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        lazyNode(hasContentDescription("刷新数据"))
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        lazyNode(hasContentDescription("metric 历史折线图")).assertIsDisplayed()
+        lazyNode(hasText("仅有一个数据点，收到更多上报后将显示趋势。")).assertIsDisplayed()
+    }
+
+    @Test
+    fun detail_historyChart_switchingFieldsWithIdenticalShapes_updatesChart() {
+        api.points.clear()
+        listOf("first", "second").forEachIndexed { group, key ->
+            api.points += (1..3).map { DataPoint(group * 10 + it, 1, key, "$it", "2026-10-21T09:3${it}:00Z") }
+        }
+        detail()
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasContentDescription("first 历史折线图")).assertIsDisplayed()
+        lazyNode(hasContentDescription("查看 second 趋势")).performClick()
+        lazyNode(hasContentDescription("second 历史折线图")).assertIsDisplayed()
+        compose.onNodeWithContentDescription("first 历史折线图").assertDoesNotExist()
+        lazyNode(hasContentDescription("查看 first 趋势")).performClick()
+        lazyNode(hasContentDescription("first 历史折线图")).assertIsDisplayed()
+        compose.onNodeWithContentDescription("second 历史折线图").assertDoesNotExist()
+    }
+
     private val bindConfirm = hasText("绑定设备") and hasClickAction() and hasAnyAncestor(isDialog())
 
     private fun openBindingDialog() {
         compose.onNodeWithContentDescription("添加设备").performClick()
-        awaitNode(hasText("创建设备") and hasClickAction()).assertIsSelected()
+        awaitNode(hasText("创建设备") and hasClickAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected)).assertIsSelected()
         field("设备名称").assertExists()
         compose.onNode(hasText("绑定已有") and hasClickAction()).performClick()
         compose.onNode(hasText("绑定已有") and hasClickAction()).assertIsSelected()
@@ -669,7 +895,9 @@ private const val NETWORK_ERROR = "连接失败，请检查网络后重试。"
 private const val DEVICE_NAME = "窗边的龟背竹"
 private const val SHARED_NAME = "好友的绿萝"
 private const val OTHER_USER_ID = 99
-private const val SAMPLE_TIME = "2026-10-21T09:30:00Z"
+// 实时概览只显示近期上报，模拟数据必须跟随当前时间。
+private val SAMPLE_TIME: String =
+    OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 
 /** In-memory API only: no Retrofit client, network, or device-control hardware. */
 private class FakeApiService : ApiService {
@@ -692,6 +920,7 @@ private class FakeApiService : ApiService {
     var devicesLoadGate: CompletableDeferred<Unit>? = null
     var userFailuresRemaining = 0
     var deviceFailuresRemaining = 0
+    var dataFailuresRemaining = 0
     var commandFailuresRemaining = 0
     var bindFailuresRemaining = 0
     var bindError: Exception = IOException("Simulated bind failure")
@@ -700,7 +929,7 @@ private class FakeApiService : ApiService {
     private var nextDeviceId = 2
     private var nextCommandId = 1
     private val user = User(7, "gardener", "mobile", true, SAMPLE_TIME)
-    private val points = listOf(
+    val points = mutableListOf(
         DataPoint(1, 1, "soil_moisture", "42", SAMPLE_TIME),
         DataPoint(2, 1, "temperature", "23.5", SAMPLE_TIME),
         DataPoint(3, 1, "humidity", "61", SAMPLE_TIME),
@@ -805,6 +1034,10 @@ private class FakeApiService : ApiService {
 
     override suspend fun getDeviceData(deviceId: Int, dataKey: String?, start: String?, end: String?, limit: Int): List<DataPoint> {
         delay(100)
+        if (dataFailuresRemaining > 0) {
+            dataFailuresRemaining--
+            throw IOException("Simulated data failure")
+        }
         return points.filter { it.deviceId == deviceId && (dataKey == null || it.dataKey == dataKey) }.take(limit)
     }
 
