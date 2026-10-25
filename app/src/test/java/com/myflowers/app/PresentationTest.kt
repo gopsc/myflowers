@@ -10,6 +10,7 @@ import com.myflowers.app.util.commandStatus
 import com.myflowers.app.util.commandTimedOut
 import com.myflowers.app.util.displayTime
 import com.myflowers.app.util.historyChartSeries
+import com.myflowers.app.util.hideQuickCommand
 import com.myflowers.app.util.parseCommandPayload
 import com.myflowers.app.util.payloadSummary
 import com.myflowers.app.util.quickCommands
@@ -48,6 +49,36 @@ class PresentationTest {
         )
         // water 的最新记录失败 → 回退到成功那条的参数；reboot 全部失败 → 不沉淀。
         assertEquals(listOf(QuickCommand("water", emptyMap())), quickCommands(commands))
+    }
+
+    @Test
+    fun hideQuickCommand_recordsLatestIdOfType_includingFailures() {
+        val commands = listOf(
+            command(1, "water", "executed"),
+            command(4, "water", "failed"),
+            command(2, "reboot", "executed")
+        )
+        assertEquals(mapOf("water" to 4), hideQuickCommand(emptyMap(), commands, "water"))
+        assertEquals(mapOf("water" to 4, "reboot" to 2), hideQuickCommand(mapOf("water" to 4), commands, "reboot"))
+        assertEquals(mapOf("water" to 4), hideQuickCommand(mapOf("water" to 4), commands, "unknown"))
+    }
+
+    @Test
+    fun quickCommands_hiddenTypesStayHidden_untilNewerCommandArrives() {
+        val commands = listOf(
+            command(1, "water", "executed"),
+            command(2, "reboot", "executed")
+        )
+        val hidden = hideQuickCommand(emptyMap(), commands, "water")
+        assertEquals(listOf(QuickCommand("reboot", emptyMap())), quickCommands(commands, hidden))
+        val resent = listOf(command(3, "water", "pending").copy(payload = mapOf("amount" to 80))) + commands
+        assertEquals(
+            listOf(QuickCommand("water", mapOf("amount" to 80)), QuickCommand("reboot", emptyMap())),
+            quickCommands(resent, hidden)
+        )
+        // 被移除后只新增了失败记录：仍不恢复。
+        val failedRetry = listOf(command(5, "water", "failed")) + commands
+        assertEquals(listOf(QuickCommand("reboot", emptyMap())), quickCommands(failedRetry, hidden))
     }
 
     @Test

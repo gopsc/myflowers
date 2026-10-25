@@ -133,13 +133,21 @@ data class QuickCommand(val type: String, val payload: Map<String, Any>)
 /**
  * 把指令历史变成快捷指令：每个类型一条，取该类型最近一次的参数，按最近使用排序。
  * 全部记录都失败的类型不沉淀（设备不认的指令不该一键重发）。
+ * hidden 记录用户移除时该类型的最新指令 id；只有出现更新的同类指令才重新显示。
  */
-fun quickCommands(commands: List<Command>): List<QuickCommand> =
+fun quickCommands(commands: List<Command>, hidden: Map<String, Int> = emptyMap()): List<QuickCommand> =
     commands.filter { it.status != "failed" }
         .groupBy { it.commandType }
         .map { group -> group.value.maxBy { it.id } }
+        .filter { latest -> hidden[latest.commandType]?.let { latest.id > it } ?: true }
         .sortedByDescending { it.id }
         .map { QuickCommand(it.commandType, it.payload) }
+
+/** 移除某类快捷指令：记下该类型当前最新的指令 id（含失败记录）。 */
+fun hideQuickCommand(hidden: Map<String, Int>, commands: List<Command>, type: String): Map<String, Int> {
+    val latestId = commands.filter { it.commandType == type }.maxOfOrNull { it.id } ?: return hidden
+    return hidden + (type to latestId)
+}
 
 /** 快捷按钮的参数摘要：空参数显示「无参数」，整数去掉 Gson 带出的小数点。 */
 fun payloadSummary(payload: Map<String, Any>): String {

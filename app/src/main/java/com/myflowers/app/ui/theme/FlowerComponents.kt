@@ -19,9 +19,11 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -109,11 +111,34 @@ fun StatusPill(online: Boolean) {
 }
 
 @Composable
-fun SectionTitle(title: String, subtitle: String? = null) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(title, style = MaterialTheme.typography.titleLarge)
-        subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+fun SectionTitle(title: String, subtitle: String? = null, action: (@Composable () -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        action?.invoke()
     }
+}
+
+@Composable
+fun IconBadge(
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+    size: Dp = 40.dp,
+    containerColor: Color = MaterialTheme.colorScheme.secondaryContainer,
+    contentColor: Color = MaterialTheme.colorScheme.primary
+) {
+    Surface(modifier.size(size), shape = CircleShape, color = containerColor, contentColor = contentColor) {
+        Box(contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(size * 0.5f)) }
+    }
+}
+
+/** 浅色到主色容器的柔和渐变，用于页面顶部的主卡片。 */
+@Composable
+fun heroBrush(): Brush {
+    val colors = MaterialTheme.colorScheme
+    return Brush.linearGradient(listOf(colors.secondaryContainer, colors.primaryContainer))
 }
 
 @Composable

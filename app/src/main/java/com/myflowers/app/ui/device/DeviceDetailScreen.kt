@@ -2,21 +2,26 @@ package com.myflowers.app.ui.device
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
@@ -63,7 +68,10 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
     var showCustom by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val quick = quickCommands(commands)
+    var hiddenQuick by remember(device.id) { mutableStateOf(repository.hiddenQuickCommands(device.id)) }
+    var editingQuick by rememberSaveable(device.id) { mutableStateOf(false) }
+    val quick = quickCommands(commands, hiddenQuick)
+    LaunchedEffect(quick.isEmpty()) { if (quick.isEmpty()) editingQuick = false }
     val historySeries = remember(history) { historyChartSeries(history) }
     var historyKey by rememberSaveable(device.id) { mutableStateOf<String?>(null) }
     val selectedSeries = historySeries.find { it.dataKey == historyKey } ?: historySeries.firstOrNull()
@@ -96,6 +104,23 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
         }
     }
 
+    fun updateHidden(hidden: Map<String, Int>) {
+        hiddenQuick = hidden
+        repository.setHiddenQuickCommands(device.id, hidden)
+    }
+
+    fun removeQuick(type: String) {
+        val previous = hiddenQuick[type]
+        updateHidden(hideQuickCommand(hiddenQuick, commands, type))
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val result = snackbar.showSnackbar("已移除「${commandTitle(type)}」快捷指令", actionLabel = "撤销", duration = SnackbarDuration.Short)
+            if (result == SnackbarResult.ActionPerformed) {
+                updateHidden(if (previous == null) hiddenQuick - type else hiddenQuick + (type to previous))
+            }
+        }
+    }
+
     fun send(type: String, payload: Map<String, Any> = emptyMap(), onFinished: (Boolean) -> Unit = {}) {
         if (busyCommand != null) return
         busyCommand = type
@@ -104,6 +129,7 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
             try {
                 val command = repository.sendCommand(device.id, type, payload)
                 commands = listOf(command) + commands.filterNot { it.id == command.id }
+                if (type in hiddenQuick) updateHidden(hiddenQuick - type)
                 scope.launch { snackbar.showSnackbar("${commandTitle(type)}指令已提交，${commandStatus(command.status)}") }
                 onFinished(true)
             } catch (e: CancellationException) {
@@ -132,7 +158,7 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                     }
                 }
                 item {
-                    Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.secondaryContainer) {
+                    Box(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.extraLarge).background(heroBrush())) {
                         Column(Modifier.padding(22.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("STAY CONNECTED", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -201,38 +227,55 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                     }
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            SectionTitle("轻松照看", "指令提交不代表设备已执行，请以运行记录为准。")
+                            SectionTitle(
+                                "轻松照看",
+                                if (editingQuick) "移除只影响本机的快捷方式，运行记录不受影响；再次发送同类指令会重新出现。"
+                                else "指令提交不代表设备已执行，请以运行记录为准。",
+                                action = if (quick.isEmpty()) null else {
+                                    {
+                                        TextButton(onClick = { editingQuick = !editingQuick }) {
+                                            Icon(if (editingQuick) Icons.Outlined.Check else Icons.Outlined.Edit, null, Modifier.size(18.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(if (editingQuick) "完成" else "管理")
+                                        }
+                                    }
+                                }
+                            )
                             quick.chunked(2).forEach { row ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     row.forEach { command ->
-                                        CareButton(
-                                            title = commandTitle(command.type),
-                                            subtitle = payloadSummary(command.payload),
-                                            icon = commandIcon(command.type),
+                                        QuickCommandTile(
+                                            command = command,
+                                            editing = editingQuick,
                                             loading = busyCommand == command.type,
                                             enabled = busyCommand == null && !loading,
                                             modifier = Modifier.weight(1f),
-                                            onClick = { send(command.type, command.payload) }
+                                            onSend = { send(command.type, command.payload) },
+                                            onRemove = { removeQuick(command.type) }
                                         )
                                     }
+                                    if (row.size == 1) Spacer(Modifier.weight(1f))
                                 }
                             }
                             OutlinedButton(
                                 onClick = { commandError = null; showCustom = true },
                                 enabled = busyCommand == null && !loading,
                                 modifier = Modifier.fillMaxWidth().semantics { contentDescription = "自定义指令" },
-                                shape = MaterialTheme.shapes.large
+                                shape = MaterialTheme.shapes.large,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                             ) {
                                 Row(
-                                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                    Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
-                                    Icon(Icons.Outlined.Tune, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
-                                    Column {
-                                        Text("自定义指令", style = MaterialTheme.typography.titleMedium)
+                                    IconBadge(Icons.Outlined.Tune, size = 36.dp)
+                                    Column(Modifier.weight(1f)) {
+                                        Text("自定义指令", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                                         Text("任意类型 + JSON 参数", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
+                                    Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.size(18.dp))
                                 }
                             }
                             if (!currentDevice.isOnline) Text("设备当前离线，指令可能需要等待设备重新连接。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -276,30 +319,72 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
 }
 
 @Composable
-private fun CareButton(title: String, subtitle: String, icon: ImageVector, loading: Boolean, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun QuickCommandTile(
+    command: QuickCommand,
+    editing: Boolean,
+    loading: Boolean,
+    enabled: Boolean,
+    modifier: Modifier,
+    onSend: () -> Unit,
+    onRemove: () -> Unit
+) {
     val colors = MaterialTheme.colorScheme
-    Button(
-        onClick = onClick, enabled = enabled, modifier = modifier,
-        shape = MaterialTheme.shapes.large, contentPadding = PaddingValues(16.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = colors.primary, contentColor = colors.onPrimary)
-    ) {
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (loading) CircularProgressIndicator(Modifier.size(25.dp), color = LocalContentColor.current, strokeWidth = 2.dp)
-            else Icon(icon, null, Modifier.size(25.dp))
-            Text(if (loading) "提交中…" else title, style = MaterialTheme.typography.titleMedium)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall)
+    val title = commandTitle(command.type)
+    val content: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Surface(Modifier.size(40.dp), shape = CircleShape, color = colors.surface, contentColor = colors.primary) {
+                Box(contentAlignment = Alignment.Center) {
+                    if (loading) CircularProgressIndicator(Modifier.size(20.dp), color = colors.primary, strokeWidth = 2.dp)
+                    else Icon(commandIcon(command.type), null, Modifier.size(20.dp))
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(if (loading) "提交中…" else title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(payloadSummary(command.payload), style = MaterialTheme.typography.bodySmall, color = colors.onPrimaryContainer.copy(alpha = 0.72f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+    Box(modifier) {
+        if (editing) {
+            Surface(
+                Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+                color = colors.surface,
+                contentColor = colors.onSurface,
+                border = BorderStroke(1.dp, colors.outlineVariant),
+                content = content
+            )
+            IconButton(onClick = onRemove, modifier = Modifier.align(Alignment.TopEnd)) {
+                Icon(Icons.Outlined.RemoveCircleOutline, "移除快捷指令 $title", tint = colors.error)
+            }
+        } else {
+            Surface(
+                onClick = onSend,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth().alpha(if (enabled || loading) 1f else 0.55f),
+                shape = MaterialTheme.shapes.large,
+                color = colors.primaryContainer,
+                contentColor = colors.onPrimaryContainer,
+                content = content
+            )
         }
     }
 }
 
 @Composable
 private fun SensorCard(dataKey: String, point: DataPoint?, loading: Boolean, modifier: Modifier) {
-    Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Outlined.Sensors, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(23.dp))
-            Text(dataKey, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val colors = MaterialTheme.colorScheme
+    Surface(modifier, shape = MaterialTheme.shapes.large, color = colors.surface, border = BorderStroke(1.dp, colors.outlineVariant)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                IconBadge(Icons.Outlined.Sensors, size = 30.dp)
+                Text(dataKey, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             Text(point?.dataValue ?: "—", style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(if (point != null) displayTime(point.timestamp) else if (loading) "读取中" else "暂无读数", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Icon(Icons.Outlined.Schedule, null, Modifier.size(12.dp), tint = colors.onSurfaceVariant)
+                Text(if (point != null) displayTime(point.timestamp) else if (loading) "读取中" else "暂无读数", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+            }
         }
     }
 }
@@ -378,18 +463,26 @@ private fun CustomCommandDialog(
 @Composable
 fun CommandCard(command: Command) {
     val timedOut = commandTimedOut(command.status, command.createdAt, Instant.now())
-    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(commandIcon(command.commandType), null, tint = MaterialTheme.colorScheme.primary)
+    val colors = MaterialTheme.colorScheme
+    val (container, content) = when {
+        command.status == "failed" || timedOut -> colors.errorContainer to colors.onErrorContainer
+        command.status == "executed" -> colors.primaryContainer to colors.onPrimaryContainer
+        else -> colors.tertiaryContainer to colors.onTertiaryContainer
+    }
+    Surface(shape = MaterialTheme.shapes.medium, color = colors.surface, border = BorderStroke(1.dp, colors.outlineVariant), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            IconBadge(commandIcon(command.commandType), size = 36.dp)
             Column(Modifier.weight(1f)) {
-                Text(commandTitle(command.commandType), style = MaterialTheme.typography.titleSmall)
-                Text(displayTime(command.createdAt), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(commandTitle(command.commandType), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(displayTime(command.createdAt), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
             }
-            Text(
-                if (timedOut) "超时失效" else commandStatus(command.status),
-                style = MaterialTheme.typography.labelMedium,
-                color = if (command.status == "failed" || timedOut) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-            )
+            Surface(shape = CircleShape, color = container, contentColor = content) {
+                Text(
+                    if (timedOut) "超时失效" else commandStatus(command.status),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
         }
     }
 }

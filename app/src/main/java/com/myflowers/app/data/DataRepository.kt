@@ -1,5 +1,6 @@
 package com.myflowers.app.data
 
+import com.myflowers.app.data.local.QuickCommandStore
 import com.myflowers.app.data.local.TokenManager
 import com.myflowers.app.data.model.*
 import com.myflowers.app.data.remote.RetrofitClient
@@ -66,4 +67,9 @@ class DataRepository(private val api: ApiService = RetrofitClient.apiService) {
 
     suspend fun getCommandHistory(deviceId: Int? = null, limit: Int = 50): List<Command> =
         api.getCommandHistory(deviceId, limit)
+
+    fun hiddenQuickCommands(deviceId: Int): Map<String, Int> = QuickCommandStore.hidden(deviceId)
+
+    fun setHiddenQuickCommands(deviceId: Int, hidden: Map<String, Int>) =
+        QuickCommandStore.setHidden(deviceId, hidden)
 }

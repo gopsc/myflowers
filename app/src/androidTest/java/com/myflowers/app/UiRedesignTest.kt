@@ -14,6 +14,7 @@ import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.myflowers.app.data.DataRepository
+import com.myflowers.app.data.local.QuickCommandStore
 import com.myflowers.app.data.local.TokenManager
 import com.myflowers.app.data.model.*
 import com.myflowers.app.data.remote.ApiService
@@ -51,11 +52,14 @@ class UiRedesignTest {
     fun initializeTokens() {
         TokenManager.init(ApplicationProvider.getApplicationContext())
         TokenManager.clear()
+        QuickCommandStore.init(ApplicationProvider.getApplicationContext())
+        QuickCommandStore.clear()
     }
 
     @After
     fun clearTokens() {
         TokenManager.clear()
+        QuickCommandStore.clear()
     }
 
     @Test
@@ -215,6 +219,7 @@ class UiRedesignTest {
         lazyNode(hasText("自定义指令") and hasClickAction()).assertIsEnabled()
         compose.onNode(hasText("浇水") and hasClickAction()).assertDoesNotExist()
         compose.onNode(hasText("开灯") and hasClickAction()).assertDoesNotExist()
+        compose.onNodeWithText("管理").assertDoesNotExist()
         // Only the custom command entry is actionable besides navigation/refresh/tabs.
         compose.onAllNodes(
             hasClickAction() and !hasContentDescription("返回列表") and
@@ -232,10 +237,10 @@ class UiRedesignTest {
         lazyNode(hasText("浇水") and hasClickAction()).assertIsEnabled()
         lazyNode(hasText("开灯") and hasClickAction()).assertIsEnabled()
         lazyNode(hasText("amount=100")).assertIsDisplayed()
-        // Exclude navigation/refresh and the two tabs: the two history-derived quick actions and the custom entry.
+        // Exclude navigation/refresh, the two tabs and the manage toggle: the two history-derived quick actions and the custom entry.
         compose.onAllNodes(
             hasClickAction() and !hasContentDescription("返回列表") and
-                !hasContentDescription("刷新数据") and !hasText("实时概览") and !hasText("运行记录")
+                !hasContentDescription("刷新数据") and !hasText("实时概览") and !hasText("运行记录") and !hasText("管理")
         ).assertCountEquals(3)
         compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
         screenshot("detail-redesign.png")
@@ -256,6 +261,63 @@ class UiRedesignTest {
         lazyNode(hasText("运行记录") and hasClickAction()).performClick()
         lazyNode(hasText("等待执行")).assertIsDisplayed()
         compose.onNodeWithText("已下发").assertDoesNotExist()
+    }
+
+    @Test
+    fun detail_quickCommand_removeUndo_persists_andResendRestores() {
+        api.commands += Command(60, 1, 7, "turn_on_light", emptyMap(), "executed", SAMPLE_TIME)
+        api.commands += Command(61, 1, 7, "water", mapOf("amount" to 100), "executed", SAMPLE_TIME)
+        api.nextCommandId = 100
+        detail()
+        lazyNode(hasText("管理") and hasClickAction()).performClick()
+        // 管理状态下快捷指令只能移除，不会误发送。
+        compose.onNode(hasText("浇水") and hasClickAction()).assertDoesNotExist()
+        lazyNode(hasContentDescription("移除快捷指令 浇水")).assertIsDisplayed()
+        lazyNode(hasText("自定义指令") and hasClickAction())
+        screenshot("quick-manage.png")
+
+        lazyNode(hasContentDescription("移除快捷指令 浇水")).performClick()
+        awaitNode(hasText("已移除「浇水」快捷指令"))
+        compose.onNodeWithContentDescription("移除快捷指令 浇水").assertDoesNotExist()
+        compose.onNodeWithText("撤销").performClick()
+        lazyNode(hasContentDescription("移除快捷指令 浇水")).assertIsDisplayed()
+        compose.runOnIdle { assertTrue(QuickCommandStore.hidden(1).isEmpty()) }
+
+        lazyNode(hasContentDescription("移除快捷指令 浇水")).performClick()
+        awaitSnackbarGone("已移除「浇水」快捷指令")
+        lazyNode(hasContentDescription("移除快捷指令 开灯")).performClick()
+        awaitSnackbarGone("已移除「开灯」快捷指令")
+        // 全部移除后自动退出管理状态。
+        compose.onNodeWithText("管理").assertDoesNotExist()
+        compose.onNodeWithText("完成").assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(mapOf("water" to 61, "turn_on_light" to 60), QuickCommandStore.hidden(1))
+            assertTrue(api.commandRequests.isEmpty())
+            assertEquals(2, api.commands.size)
+        }
+
+        lazyNode(hasContentDescription("刷新数据")).performClick()
+        awaitNode(hasContentDescription("刷新数据") and isEnabled())
+        compose.onNode(hasText("浇水") and hasClickAction()).assertDoesNotExist()
+        lazyNode(hasText("运行记录") and hasClickAction()).performClick()
+        lazyNode(hasText("浇水")).assertIsDisplayed()
+        lazyNode(hasText("实时概览") and hasClickAction()).performClick()
+
+        lazyNode(hasText("自定义指令") and hasClickAction()).performClick()
+        field("指令类型").performTextInput("water")
+        field("参数（JSON，可选）").performTextInput("""{"amount": 80}""")
+        closeSoftKeyboard()
+        compose.onNode(hasContentDescription("发送自定义指令")).performClick()
+        awaitNoDialog()
+        awaitNode(hasText("浇水") and hasClickAction())
+        lazyNode(hasText("amount=80")).assertIsDisplayed()
+        compose.onNode(hasText("开灯") and hasClickAction()).assertDoesNotExist()
+        compose.runOnIdle { assertEquals(mapOf("turn_on_light" to 60), QuickCommandStore.hidden(1)) }
+    }
+
+    private fun awaitSnackbarGone(text: String) {
+        awaitNode(hasText(text))
+        compose.waitUntil(10_000) { compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isEmpty() }
     }
 
     @Test
@@ -927,7 +989,7 @@ private class FakeApiService : ApiService {
     var unbindFailuresRemaining = 0
     var unbindError: Exception = IOException("Simulated unbind failure")
     private var nextDeviceId = 2
-    private var nextCommandId = 1
+    var nextCommandId = 1
     private val user = User(7, "gardener", "mobile", true, SAMPLE_TIME)
     val points = mutableListOf(
         DataPoint(1, 1, "soil_moisture", "42", SAMPLE_TIME),
