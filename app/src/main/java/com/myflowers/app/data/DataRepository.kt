@@ -48,8 +48,16 @@ class DataRepository(private val api: ApiService = RetrofitClient.apiService) {
     suspend fun getDeviceData(
         deviceId: Int,
         dataKey: String? = null,
+        start: String? = null,
+        intervalSeconds: Int? = null,
         limit: Int = 100
-    ): List<DataPoint> = api.getDeviceData(deviceId, dataKey, limit = limit)
+    ): List<DataPoint> = api.getDeviceData(
+        deviceId,
+        dataKey = dataKey,
+        start = start,
+        limit = limit,
+        intervalSeconds = intervalSeconds
+    )
 
     suspend fun getLatestData(deviceId: Int, dataKey: String? = null): DataPoint? {
         return try {

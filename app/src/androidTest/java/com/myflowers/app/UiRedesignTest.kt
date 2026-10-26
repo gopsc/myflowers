@@ -682,7 +682,7 @@ class UiRedesignTest {
     }
 
     @Test
-    fun detail_commandHistory_showsAtMostTenRecentCommands() {
+    fun detail_commandHistory_showsAtMostFiveRecentCommands() {
         api.commands.clear()
         api.commands += (1..12).map {
             Command(it, 1, 7, "cmd_%02d".format(it), emptyMap(), "executed", SAMPLE_TIME)
@@ -690,12 +690,9 @@ class UiRedesignTest {
         detail()
         lazyNode(hasText("运行记录") and hasClickAction()).performClick()
         lazyNode(hasText("cmd_01")).assertIsDisplayed()
-        lazyNode(hasText("cmd_10")).assertIsDisplayed()
-        repeat(3) { compose.onNode(hasScrollToIndexAction()).performTouchInput { swipeUp() } }
-        compose.waitForIdle()
-        lazyNode(hasText("cmd_10")).assertIsDisplayed()
-        compose.onNodeWithText("cmd_11").assertDoesNotExist()
-        compose.onNodeWithText("cmd_12").assertDoesNotExist()
+        lazyNode(hasText("cmd_05")).assertIsDisplayed()
+        compose.onNodeWithText("cmd_06").assertDoesNotExist()
+        compose.onNodeWithText("cmd_10").assertDoesNotExist()
     }
 
     @Test
@@ -713,6 +710,9 @@ class UiRedesignTest {
         val chart = hasContentDescription("temperature 历史折线图")
         lazyNode(chart).assertIsDisplayed()
         compose.onNode(chart).assert(!hasClickAction())
+        lazyNode(hasText("15 分钟均值 · 末点最新")).assertIsDisplayed()
+        lazyNode(hasText("最新")).assertIsDisplayed()
+        compose.onNodeWithText("28.5").assertIsDisplayed()
         compose.onNodeWithText("最低").assertDoesNotExist()
         compose.onNodeWithText("最高").assertDoesNotExist()
         compose.onAllNodes(hasText("个数据点", substring = true)).assertCountEquals(0)
@@ -1094,7 +1094,14 @@ private class FakeApiService : ApiService {
         return points.first { it.deviceId == deviceId && (dataKey == null || it.dataKey == dataKey) }
     }
 
-    override suspend fun getDeviceData(deviceId: Int, dataKey: String?, start: String?, end: String?, limit: Int): List<DataPoint> {
+    override suspend fun getDeviceData(
+        deviceId: Int,
+        dataKey: String?,
+        start: String?,
+        end: String?,
+        limit: Int,
+        intervalSeconds: Int?
+    ): List<DataPoint> {
         delay(100)
         if (dataFailuresRemaining > 0) {
             dataFailuresRemaining--

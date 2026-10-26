@@ -147,6 +147,30 @@ class DataRepositoryTest {
     }
 
     @Test
+    fun chartDataPassesWindowIntervalAndLimitToApi() = runTest {
+        val calls = mutableListOf<List<Any?>>()
+        val api = Proxy.newProxyInstance(ApiService::class.java.classLoader, arrayOf(ApiService::class.java)) { _, method, args ->
+            check(method.name == "getDeviceData") { "Unexpected API call: ${method.name}" }
+            // suspend 方法的最后一个参数是 Continuation，只比较业务参数。
+            calls += args!!.take(6)
+            emptyList<DataPoint>()
+        } as ApiService
+        val start = "2026-10-25T20:57:00Z"
+
+        DataRepository(api).getDeviceData(
+            deviceId = 42,
+            start = start,
+            intervalSeconds = 900,
+            limit = 1000
+        )
+
+        assertEquals(
+            listOf(listOf(42, null, start, null, 1000, 900)),
+            calls
+        )
+    }
+
+    @Test
     fun latestDataReturnsServerValue() = runTest {
         val point = DataPoint(1, 1, "temperature", "23.5", "2026-10-22T12:00:00")
         assertEquals(point, repository { point }.getLatestData(1, "temperature"))

@@ -5,6 +5,7 @@ import com.myflowers.app.data.model.DataPoint
 import com.myflowers.app.util.HistoryChartPoint
 import com.myflowers.app.util.HistoryChartSeries
 import com.myflowers.app.util.chartFraction
+import com.myflowers.app.util.chartHistoryWithLatest
 import com.myflowers.app.util.chartNumber
 import com.myflowers.app.util.commandStatus
 import com.myflowers.app.util.commandTimedOut
@@ -270,6 +271,37 @@ class PresentationTest {
         )).single()
         assertEquals(listOf(2, 1), series.points.map { it.record.id })
         assertEquals(800_000, series.points.last().time.nano - series.points.first().time.nano)
+    }
+
+    @Test
+    fun chartHistoryWithLatest_appendsNewerRawReadingPerKey() {
+        val aggregated = listOf(
+            dataPoint(1, "45", "2026-10-26T20:45:00Z", key = "humidity"),
+            dataPoint(2, "20", "2026-10-26T20:45:00Z", key = "temperature")
+        )
+        val latest = mapOf(
+            "humidity" to dataPoint(3, "47.12", "2026-10-26T20:57:00Z", key = "humidity"),
+            "temperature" to dataPoint(4, "21", "2026-10-26T20:50:00Z", key = "temperature"),
+            "other" to dataPoint(5, "1", "2026-10-26T20:58:00Z", key = "other"),
+            "missing" to null
+        )
+
+        val merged = chartHistoryWithLatest(aggregated, latest)
+
+        assertEquals(listOf(1, 2, 3, 4), merged.map { it.id })
+        assertFalse(merged.any { it.dataKey == "other" })
+    }
+
+    @Test
+    fun chartHistoryWithLatest_doesNotDuplicateAnAlreadyPresentLatestReading() {
+        val latest = dataPoint(9, "47", "2026-10-26T20:57:00Z", key = "humidity")
+        val aggregated = listOf(
+            dataPoint(1, "45", "2026-10-26T20:45:00Z", key = "humidity"),
+            latest
+        )
+
+        assertEquals(aggregated, chartHistoryWithLatest(aggregated, mapOf("humidity" to latest)))
+        assertTrue(chartHistoryWithLatest(emptyList(), mapOf("humidity" to latest)).isEmpty())
     }
 
     @Test

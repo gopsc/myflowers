@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.myflowers.app.data.DataRepository
@@ -50,7 +51,10 @@ import java.time.Duration
 import java.time.Instant
 
 private const val HISTORY_LIMIT = 100
-private const val VISIBLE_COMMAND_LIMIT = 10
+private const val VISIBLE_COMMAND_LIMIT = 5
+private const val CHART_WINDOW_HOURS = 24L
+private const val CHART_INTERVAL_SECONDS = 15 * 60
+private const val CHART_POINT_LIMIT = 1000
 
 @Composable
 fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () -> Unit) {
@@ -58,6 +62,7 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
     var sensorKeys by remember(device.id) { mutableStateOf<List<String>>(emptyList()) }
     var latest by remember(device.id) { mutableStateOf<Map<String, DataPoint?>>(emptyMap()) }
     var history by remember(device.id) { mutableStateOf<List<DataPoint>>(emptyList()) }
+    var chartHistory by remember(device.id) { mutableStateOf<List<DataPoint>>(emptyList()) }
     var commands by remember(device.id) { mutableStateOf<List<Command>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -72,9 +77,15 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
     var editingQuick by rememberSaveable(device.id) { mutableStateOf(false) }
     val quick = quickCommands(commands, hiddenQuick)
     LaunchedEffect(quick.isEmpty()) { if (quick.isEmpty()) editingQuick = false }
-    val historySeries = remember(history) { historyChartSeries(history) }
+    val recentSeries = remember(history) { historyChartSeries(history) }
+    val longTermSeries = remember(chartHistory) { historyChartSeries(chartHistory) }
+    val chartKeys = remember(recentSeries, longTermSeries) {
+        (recentSeries.map { it.dataKey } + longTermSeries.map { it.dataKey }).distinct()
+    }
     var historyKey by rememberSaveable(device.id) { mutableStateOf<String?>(null) }
-    val selectedSeries = historySeries.find { it.dataKey == historyKey } ?: historySeries.firstOrNull()
+    val selectedKey = historyKey?.takeIf { it in chartKeys } ?: chartKeys.firstOrNull()
+    val selectedRecent = recentSeries.find { it.dataKey == selectedKey }
+    val selectedLongTerm = longTermSeries.find { it.dataKey == selectedKey }
     val recentKeys = remember(sensorKeys, latest) { recentSensorKeys(sensorKeys, latest, Instant.now()) }
 
     LaunchedEffect(device.id, refresh) {
@@ -92,8 +103,25 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                     keys.map { key -> async { key to repository.getLatestData(device.id, key) } }.awaitAll().toMap()
                 }
                 val commandsJob = async { repository.getCommandHistory(device.id, limit = 30) }
+                // 历史图单独取 24 小时、15 分钟聚合的数据；失败时退回最近的原始记录。
+                val chartJob = async {
+                    try {
+                        repository.getDeviceData(
+                            device.id,
+                            start = Instant.now().minus(Duration.ofHours(CHART_WINDOW_HOURS)).toString(),
+                            intervalSeconds = CHART_INTERVAL_SECONDS,
+                            limit = CHART_POINT_LIMIT
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                }
                 latest = latestJob.await()
                 commands = commandsJob.await()
+                val aggregated = chartJob.await()
+                chartHistory = if (aggregated.isEmpty()) fetchedHistory else chartHistoryWithLatest(aggregated, latest)
             }
         } catch (e: CancellationException) {
             throw e
@@ -283,24 +311,50 @@ fun DeviceDetailScreen(device: Device, repository: DataRepository, onBack: () ->
                         }
                     }
                 } else {
-                    item { SectionTitle("数据足迹") }
-                    if (history.isEmpty()) item { Text(if (loading) "正在读取数据…" else if (error != null) "设备数据未能加载" else "暂未收到数据，等待设备第一次上报。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    if (selectedSeries != null) {
+                    item { SectionTitle("数据足迹", "最近记录与 24 小时趋势") }
+                    if (chartKeys.isEmpty()) {
+                        item {
+                            Text(
+                                when {
+                                    loading -> "正在读取数据…"
+                                    error != null -> "设备数据未能加载"
+                                    history.isEmpty() -> "暂未收到数据，等待设备第一次上报。"
+                                    else -> "暂无可绘制的数值数据。"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
                         item {
                             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                historySeries.forEach { series ->
+                                chartKeys.forEach { key ->
                                     FilterChip(
-                                        selected = series.dataKey == selectedSeries.dataKey,
-                                        onClick = { historyKey = series.dataKey },
-                                        label = { Text(series.dataKey) },
-                                        modifier = Modifier.semantics { contentDescription = "查看 ${series.dataKey} 趋势" }
+                                        selected = key == selectedKey,
+                                        onClick = { historyKey = key },
+                                        label = { Text(key) },
+                                        modifier = Modifier.semantics { contentDescription = "查看 $key 趋势" }
                                     )
                                 }
                             }
                         }
-                        item { HistoryChart(selectedSeries) }
-                    } else if (history.isNotEmpty()) {
-                        item { Text("暂无可绘制的数值数据。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                ChartSectionCaption("近期状态", "最近 100 条原始记录")
+                                if (selectedRecent != null) {
+                                    HistoryChart(selectedRecent, HistoryChartMode.Recent)
+                                } else {
+                                    EmptyChartNotice("最近记录暂无可绘制的数值")
+                                }
+                                Spacer(Modifier.height(10.dp))
+                                ChartSectionCaption("长期状态", "近 24 小时趋势")
+                                if (selectedLongTerm != null) {
+                                    HistoryChart(selectedLongTerm, HistoryChartMode.LongTerm)
+                                } else {
+                                    EmptyChartNotice("近 24 小时暂无可绘制的数值")
+                                }
+                            }
+                        }
                     }
                     item { SectionTitle("最近的指令") }
                     if (commands.isEmpty()) item { Text(if (loading) "正在读取指令…" else if (error != null) "指令记录未能加载" else "还没有任何指令。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -487,8 +541,10 @@ fun CommandCard(command: Command) {
     }
 }
 
+private enum class HistoryChartMode { Recent, LongTerm }
+
 @Composable
-private fun HistoryChart(series: HistoryChartSeries) {
+private fun HistoryChart(series: HistoryChartSeries, mode: HistoryChartMode) {
     val points = series.points
     val minimum = points.minOf { it.value }
     val maximum = points.maxOf { it.value }
@@ -508,10 +564,53 @@ private fun HistoryChart(series: HistoryChartSeries) {
 
     Surface(shape = MaterialTheme.shapes.large, color = colors.surface, border = BorderStroke(1.dp, colors.outlineVariant)) {
         Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(series.dataKey, style = MaterialTheme.typography.titleMedium)
+            if (mode == HistoryChartMode.LongTerm) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            series.dataKey,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            "15 分钟均值 · 末点最新",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            chartNumber(points.last().value),
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = colors.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            "最新",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    series.dataKey,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Canvas(
                 Modifier.fillMaxWidth().height(200.dp)
-                    .semantics { contentDescription = "${series.dataKey} 历史折线图" }
+                    .semantics {
+                        contentDescription = if (mode == HistoryChartMode.LongTerm) {
+                            "${series.dataKey} 历史折线图"
+                        } else {
+                            "${series.dataKey} 近期状态折线图"
+                        }
+                    }
             ) {
                 val plotWidth = (size.width - left - inset).coerceAtLeast(1f)
                 val plotHeight = (size.height - inset * 2).coerceAtLeast(1f)
@@ -535,16 +634,61 @@ private fun HistoryChart(series: HistoryChartSeries) {
                         coordinates.drop(1).forEach { lineTo(it.x, it.y) }
                     }
                     drawPath(line, colors.primary, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+                    if (mode == HistoryChartMode.Recent) {
+                        coordinates.forEach { drawCircle(colors.primary, 3.dp.toPx(), it) }
+                    }
                 }
-                coordinates.forEach { drawCircle(colors.primary, 3.dp.toPx(), it) }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(displayTime(points.first().record.timestamp), style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
+                if (mode == HistoryChartMode.LongTerm && points.size > 2) {
+                    Text(
+                        displayTime(points[points.size / 2].record.timestamp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Center
+                    )
+                }
                 if (points.first().time != points.last().time) {
-                    Text(displayTime(points.last().record.timestamp), style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                    Text(displayTime(points.last().record.timestamp), style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
                 }
             }
-            if (points.size == 1) Text("仅有一个数据点，收到更多上报后将显示趋势。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+            if (points.size == 1) {
+                Text(
+                    if (mode == HistoryChartMode.LongTerm) {
+                        "近 24 小时只有一个数据点，收到更多上报后将显示趋势。"
+                    } else {
+                        "仅有一个数据点，收到更多上报后将显示趋势。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun ChartSectionCaption(title: String, subtitle: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun EmptyChartNotice(text: String) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Text(
+            text,
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

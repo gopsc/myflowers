@@ -62,7 +62,8 @@ interface ApiService {
         @Query("data_key") dataKey: String? = null,
         @Query("start") start: String? = null,
         @Query("end") end: String? = null,
-        @Query("limit") limit: Int = 100
+        @Query("limit") limit: Int = 100,
+        @Query("interval") intervalSeconds: Int? = null
     ): List<DataPoint>
 
     @GET("api/v1/data/{device_id}/latest")

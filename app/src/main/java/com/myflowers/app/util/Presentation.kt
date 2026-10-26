@@ -68,6 +68,29 @@ fun historyChartSeries(history: List<DataPoint>): List<HistoryChartSeries> =
         )
     }
 
+/**
+ * 聚合曲线末尾补上最新的原始读数，让末点与实时卡片一致。
+ * 只补聚合序列里已有的 data_key；如果最新读数已经在序列里（旧服务端回退原始
+ * 数据时），按时间比较不会重复追加。
+ */
+fun chartHistoryWithLatest(
+    aggregated: List<DataPoint>,
+    latest: Map<String, DataPoint?>
+): List<DataPoint> {
+    if (aggregated.isEmpty()) return aggregated
+    val lastTimes = aggregated.groupBy { it.dataKey }.mapValues { (_, points) ->
+        points.mapNotNull { historyTime(it.timestamp) }.maxOrNull()
+    }
+    val keys = lastTimes.keys
+    val extras = latest.values.filterNotNull().filter { point ->
+        if (point.dataKey !in keys) return@filter false
+        val time = historyTime(point.timestamp) ?: return@filter false
+        val last = lastTimes[point.dataKey] ?: return@filter false
+        time > last
+    }
+    return if (extras.isEmpty()) aggregated else aggregated + extras
+}
+
 private fun historyTime(timestamp: String): Instant? = try {
     try {
         OffsetDateTime.parse(timestamp).toInstant()
